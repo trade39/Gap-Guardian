@@ -1,0 +1,124 @@
+/* static/style.css */
+
+/* General body styling (applied if Streamlit allows global body styling, often scoped) */
+body {
+    font-family: 'Inter', sans-serif; /* Ensure Inter is loaded or use a common sans-serif */
+    color: #333; /* Default text color for light mode */
+}
+
+/* Custom Streamlit component styling */
+.stApp {
+    /* background-color: #F0F2F6; /* Example: Light gray background */
+}
+
+/* Sidebar styling */
+div[data-testid="stSidebar"] {
+    /* background-color: #FFFFFF; */
+    /* border-right: 1px solid #E0E0E0; */
+}
+
+h1, h2, h3 {
+    /* color: #6A0DAD; /* Primary color for headers */
+}
+
+/* Button styling */
+.stButton>button {
+    border-radius: 8px;
+    /* background-color: #6A0DAD; */
+    /* color: white; */
+    padding: 10px 20px;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: background-color 0.3s ease;
+}
+
+.stButton>button:hover {
+    /* background-color: #550A8A; */
+    cursor: pointer;
+}
+
+/* Input widgets */
+.stTextInput>div>div>input,
+.stNumberInput>div>div>input,
+.stDateInput>div>div>input,
+.stSelectbox>div>div {
+    border-radius: 6px;
+    /* border: 1px solid #CED4DA; */
+}
+
+/* Dataframe styling */
+.stDataFrame {
+    border-radius: 8px;
+    overflow: hidden; /* Ensures border radius is applied to table corners */
+}
+
+/* Metric container styling */
+div[data-testid="stMetric"] {
+    background-color: #FFFFFF; /* White background for metric cards */
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    border: 1px solid #E0E0E0; /* Light border for definition */
+}
+
+div[data-testid="stMetricLabel"] {
+    font-weight: bold;
+    /* color: #555; */
+}
+
+div[data-testid="stMetricValue"] {
+    font-size: 1.5em; /* Larger font for the metric value */
+    /* color: #6A0DAD; */
+}
+
+
+/* --- Dark Theme Overrides (Example - more robust theming via config.toml or JS) --- */
+/* This CSS can be conditionally loaded or overridden by Streamlit's theme mechanism. */
+/* For a more dynamic theme toggle, you'd typically use Streamlit's built-in theme options
+   or JavaScript to swap stylesheets or body classes. */
+
+/* body.dark-theme {
+    color: #E0E0E0;
+}
+
+.dark-theme .stApp {
+    background-color: #1E1E1E;
+}
+
+.dark-theme div[data-testid="stSidebar"] {
+    background-color: #252526;
+    border-right: 1px solid #333333;
+}
+
+.dark-theme h1, .dark-theme h2, .dark-theme h3 {
+    color: #BB86FC;
+}
+
+.dark-theme .stButton>button {
+    background-color: #BB86FC;
+    color: #121212;
+}
+.dark-theme .stButton>button:hover {
+    background-color: #A050E8;
+}
+
+.dark-theme div[data-testid="stMetric"] {
+    background-color: #2A2A2E;
+    border: 1px solid #383838;
+}
+
+.dark-theme div[data-testid="stMetricLabel"] {
+    color: #AAAAAA;
+}
+
+.dark-theme div[data-testid="stMetricValue"] {
+    color: #BB86FC;
+} */
+
+/* Ensure Inter font is available */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Apply Inter font globally if not overridden by Streamlit's theme */
+body, .stApp, .stTextInput, .stButton, .stSelectbox, .stNumberInput, .stDateInput {
+    font-family: 'Inter', sans-serif !important;
+}
