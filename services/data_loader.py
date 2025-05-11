@@ -39,10 +39,6 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
         
         fetch_end_date_param = end_date_input + timedelta(days=1) if interval in ["1d", "1wk", "1mo"] else end_date_input
 
-        # When downloading a single ticker, yfinance might return columns as simple strings
-        # or as a MultiIndex with tuples like ('Close', 'TICKER').
-        # We set group_by='ticker' to False (or rely on default for single ticker) to simplify,
-        # but sometimes it still returns MultiIndex for certain assets or yf versions.
         data = yf.download(
             tickers=ticker, 
             start=current_start_date,
@@ -51,7 +47,7 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             progress=False,
             auto_adjust=False, 
             actions=False,
-            group_by='column' # A common way to get flat columns for single ticker
+            # group_by='column' # Keep this or remove; handling MultiIndex explicitly now
         )
         
         if data.empty:
@@ -59,38 +55,44 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             st.warning(f"No data found for {ticker} from {current_start_date.strftime('%Y-%m-%d')} to {end_date_input.strftime('%Y-%m-%d')} at {interval} interval.")
             return pd.DataFrame()
 
-        logger.info(f"Successfully downloaded data for {ticker}. Rows: {len(data)}. Initial columns: {data.columns.tolist()}")
+        logger.info(f"Successfully downloaded data for {ticker}. Rows: {len(data)}. Initial columns from yf: {data.columns.tolist()}")
 
-        # Standardize column names
-        standardized_columns_map = {}
+        # --- Handle MultiIndex Columns from yfinance ---
+        # If columns are MultiIndex (e.g., [('Open', 'TICKER'), ...]), flatten them.
+        if isinstance(data.columns, pd.MultiIndex):
+            logger.info(f"Data for {ticker} has MultiIndex columns. Flattening to first level.")
+            # Example: from [('Open', 'GC=F'), ('Close', 'GC=F')] to ['Open', 'Close']
+            data.columns = data.columns.get_level_values(0)
+            logger.info(f"Columns after potential MultiIndex flattening for {ticker}: {data.columns.tolist()}")
+        
+        # --- Standardize Column Names (after potential flattening) ---
+        # Now, data.columns should be a simple Index of strings.
+        standardized_rename_map = {}
         expected_final_names = {
             'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
-            'adjclose': 'Adj Close', 'adj close': 'Adj Close', 
+            'adjclose': 'Adj Close', # Handles 'Adj Close'
+            'adj close': 'Adj Close', # Handles 'adj close' if it somehow appears
             'volume': 'Volume'
         }
         
-        for col_identifier in data.columns:
-            # col_identifier can be a string or a tuple (e.g., ('Close', 'TICKER_SYMBOL'))
-            # We are interested in the first part if it's a tuple, or the string itself.
-            if isinstance(col_identifier, tuple):
-                # If yf.download uses MultiIndex columns (e.g. if group_by='ticker' or for multiple tickers)
-                # The actual column type (Open, High, etc.) is usually the first element.
-                col_name_to_process = str(col_identifier[0]) 
-            else:
-                col_name_to_process = str(col_identifier) # Ensure it's a string
-
-            processed_col_key = col_name_to_process.lower().replace(' ', '').replace('.', '')
+        for col_name_str in data.columns:
+            # Ensure col_name_str is a string (it should be after flattening or if it was already simple)
+            col_name_str = str(col_name_str) 
+            processed_col_key = col_name_str.lower().replace(' ', '').replace('.', '') # Process the string name
             
             if processed_col_key in expected_final_names:
-                standardized_columns_map[col_identifier] = expected_final_names[processed_col_key]
+                # Map from the current string name to the desired final standardized name
+                standardized_rename_map[col_name_str] = expected_final_names[processed_col_key]
         
-        data.rename(columns=standardized_columns_map, inplace=True)
-        logger.info(f"Columns after standardization for {ticker}: {data.columns.tolist()}")
+        if standardized_rename_map: # Only rename if there's something to map
+            data.rename(columns=standardized_rename_map, inplace=True)
+        logger.info(f"Columns after string standardization for {ticker}: {data.columns.tolist()}")
+
 
         required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_cols = [col for col in required_columns if col not in data.columns]
         if missing_cols:
-            logger.error(f"Data for {ticker} is missing required standardized columns: {missing_cols}. Available columns after standardization: {data.columns.tolist()}")
+            logger.error(f"Data for {ticker} is missing required standardized columns: {missing_cols}. Available columns: {data.columns.tolist()}")
             st.error(f"Fetched data for {ticker} is incomplete (missing: {', '.join(missing_cols)}). Cannot proceed.")
             return pd.DataFrame()
 
@@ -117,6 +119,7 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             return pd.DataFrame()
         
         logger.info(f"Before dropna for {ticker} - Columns: {data.columns.tolist()}")
+        # Optional: Further debugging if needed
         # logger.info(f"Before dropna for {ticker} - Data head (first 3 rows):\n{data.head(3).to_string()}")
         # import io
         # buffer = io.StringIO()
@@ -148,17 +151,19 @@ if __name__ == '__main__':
     from datetime import date, timedelta
     
     test_end_date = date.today()
-    test_start_date = test_end_date - timedelta(days=7)
+    # Ensure start_date is reasonably before end_date for testing
+    test_start_date = test_end_date - timedelta(days=min(30, settings.MAX_INTRADAY_DAYS - 2)) # Test with a smaller, valid range
 
-    tickers_to_test = ["GC=F", "^GSPC", "BTC-USD", "MSFT"]
+    tickers_to_test = ["GC=F", "^GSPC", "BTC-USD", "MSFT", "EURUSD=X"]
     for test_ticker in tickers_to_test:
-        print(f"\nFetching data for {test_ticker}...")
+        print(f"\n--- Testing: {test_ticker} ---")
         df = fetch_historical_data(test_ticker, test_start_date, test_end_date, "15m")
         if not df.empty:
             print(f"\n{test_ticker} Data (first 3 rows):")
             print(df.head(3))
             print(f"Columns: {df.columns.tolist()}")
-            print(f"Timezone: {df.index.tz}")
+            print(f"Index type: {type(df.index)}, Index TZ: {df.index.tz}")
+            print(f"Data types:\n{df.dtypes}")
         else:
             print(f"\nNo {test_ticker} data or error for period {test_start_date} to {test_end_date}.")
-
+        print(f"--- Finished: {test_ticker} ---\n")
