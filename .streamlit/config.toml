@@ -1,0 +1,34 @@
+[theme]
+primaryColor="#6A0DAD" # Purple
+backgroundColor="#FFFFFF" # Light mode background
+secondaryBackgroundColor="#F0F2F6" # Light mode secondary background
+textColor="#262730" # Light mode text
+font="sans serif"
+
+[server]
+headless = true
+port = 8501
+enableCORS = false
+# enableXsrfProtection = true # Recommended for production
+
+[logger]
+level = "info" # "debug", "info", "warning", "error", "critical"
+
+[client]
+showErrorDetails = true # Set to false in production if desired
+
+# Example of defining a custom dark theme (Streamlit also has a built-in dark theme)
+# To enable this, you might need to toggle it in the app or set it as default.
+# Streamlit's native theme toggle (Settings -> Theme) will override this unless forced in code.
+# This config.toml sets the *default* theme.
+# For a true light/dark toggle controlled by the app, CSS and session state are better.
+# This file primarily sets the initial look.
+
+# To have a default dark theme, you could use:
+# [theme]
+# base="dark"
+# primaryColor="#7928CA"
+# backgroundColor="#0E1117"
+# secondaryBackgroundColor="#161A25"
+# textColor="#FAFAFA"
+# font="sans serif"
