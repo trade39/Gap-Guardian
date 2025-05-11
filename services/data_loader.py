@@ -37,11 +37,12 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
     try:
         logger.info(f"Proceeding to yf.download for {ticker} with start={current_start_date}, end={end_date_input} (interval: {interval}).")
         
-        # Determine fetch_end_date based on interval
-        # For daily intervals, yf.download's end_date is often exclusive, so add 1 day.
-        # For intraday intervals, yf.download usually treats the date as inclusive up to the end of that day.
         fetch_end_date_param = end_date_input + timedelta(days=1) if interval in ["1d", "1wk", "1mo"] else end_date_input
 
+        # When downloading a single ticker, yfinance might return columns as simple strings
+        # or as a MultiIndex with tuples like ('Close', 'TICKER').
+        # We set group_by='ticker' to False (or rely on default for single ticker) to simplify,
+        # but sometimes it still returns MultiIndex for certain assets or yf versions.
         data = yf.download(
             tickers=ticker, 
             start=current_start_date,
@@ -49,7 +50,8 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             interval=interval, 
             progress=False,
             auto_adjust=False, 
-            actions=False 
+            actions=False,
+            group_by='column' # A common way to get flat columns for single ticker
         )
         
         if data.empty:
@@ -59,23 +61,31 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
 
         logger.info(f"Successfully downloaded data for {ticker}. Rows: {len(data)}. Initial columns: {data.columns.tolist()}")
 
-        # Standardize column names to catch variations like "Adj Close" vs "Adj. Close" etc.
-        # Convert all to lower, remove spaces and dots, then map to expected capitalized form.
-        # This is a more robust way than direct checking if yfinance changes minor things.
-        standardized_columns = {}
-        expected_map = {
+        # Standardize column names
+        standardized_columns_map = {}
+        expected_final_names = {
             'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 
-            'adjclose': 'Adj Close', 'adj close': 'Adj Close', # common variations for adj close
+            'adjclose': 'Adj Close', 'adj close': 'Adj Close', 
             'volume': 'Volume'
         }
-        for col in data.columns:
-            processed_col = col.lower().replace(' ', '').replace('.', '')
-            if processed_col in expected_map:
-                standardized_columns[col] = expected_map[processed_col]
         
-        data.rename(columns=standardized_columns, inplace=True)
-        logger.info(f"Columns after standardization for {ticker}: {data.columns.tolist()}")
+        for col_identifier in data.columns:
+            # col_identifier can be a string or a tuple (e.g., ('Close', 'TICKER_SYMBOL'))
+            # We are interested in the first part if it's a tuple, or the string itself.
+            if isinstance(col_identifier, tuple):
+                # If yf.download uses MultiIndex columns (e.g. if group_by='ticker' or for multiple tickers)
+                # The actual column type (Open, High, etc.) is usually the first element.
+                col_name_to_process = str(col_identifier[0]) 
+            else:
+                col_name_to_process = str(col_identifier) # Ensure it's a string
 
+            processed_col_key = col_name_to_process.lower().replace(' ', '').replace('.', '')
+            
+            if processed_col_key in expected_final_names:
+                standardized_columns_map[col_identifier] = expected_final_names[processed_col_key]
+        
+        data.rename(columns=standardized_columns_map, inplace=True)
+        logger.info(f"Columns after standardization for {ticker}: {data.columns.tolist()}")
 
         required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_cols = [col for col in required_columns if col not in data.columns]
@@ -101,25 +111,18 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             st.error(f"Error converting data to New York time for {ticker}.")
             return pd.DataFrame()
 
-        # Filter out data outside the originally requested end_date_input
-        # This is important because yf.download with end_date_param might fetch up to the start of that day.
         data = data[data.index.date <= end_date_input]
         if data.empty:
             logger.warning(f"Data for {ticker} became empty after date filtering (<= {end_date_input}).")
             return pd.DataFrame()
         
-        # --- Enhanced Debugging before dropna ---
         logger.info(f"Before dropna for {ticker} - Columns: {data.columns.tolist()}")
-        logger.info(f"Before dropna for {ticker} - Data head (first 3 rows):\n{data.head(3).to_string()}")
-        logger.info(f"Before dropna for {ticker} - Data info:")
-        # Streaming data.info() to logger is a bit tricky, capture with StringIO
-        import io
-        buffer = io.StringIO()
-        data.info(buf=buffer)
-        logger.info(buffer.getvalue())
-        # --- End Enhanced Debugging ---
+        # logger.info(f"Before dropna for {ticker} - Data head (first 3 rows):\n{data.head(3).to_string()}")
+        # import io
+        # buffer = io.StringIO()
+        # data.info(buf=buffer)
+        # logger.info(buffer.getvalue())
 
-        # Drop rows if essential OHLC data is NaN
         dropna_subset = ['Open', 'High', 'Low', 'Close']
         try:
             data.dropna(subset=dropna_subset, inplace=True)
@@ -129,7 +132,7 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             return pd.DataFrame()
 
         if data.empty:
-            logger.warning(f"Data for {ticker} became empty after dropna. Original rows before dropna: (check previous logs for count before this step)")
+            logger.warning(f"Data for {ticker} became empty after dropna.")
             st.warning(f"No valid data remained after cleaning (NaN drop) for {ticker} for the selected period.")
             return pd.DataFrame()
             
@@ -142,27 +145,20 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
         return pd.DataFrame()
 
 if __name__ == '__main__':
-    # Test with a known problematic ticker if possible, or a standard one
-    print("Fetching Gold Futures data (GC=F)...")
-    # Use a very recent, short period for testing to minimize data issues
+    from datetime import date, timedelta
+    
     test_end_date = date.today()
-    test_start_date = test_end_date - timedelta(days=7) # Fetch last 7 days
+    test_start_date = test_end_date - timedelta(days=7)
 
-    gold_data = fetch_historical_data("GC=F", test_start_date, test_end_date, "15m")
-    if not gold_data.empty:
-        print("\nGold Futures Data (first 5 rows):")
-        print(gold_data.head())
-        print(f"Columns: {gold_data.columns.tolist()}")
-        print(f"Timezone: {gold_data.index.tz}")
-    else:
-        print(f"\nNo Gold data or error for period {test_start_date} to {test_end_date}.")
-
-    print("\nFetching S&P 500 data (^GSPC)...")
-    sp500_data = fetch_historical_data("^GSPC", test_start_date, test_end_date, "15m")
-    if not sp500_data.empty:
-        print("\nS&P 500 Data (first 5 rows):")
-        print(sp500_data.head())
-        print(f"Columns: {sp500_data.columns.tolist()}")
-    else:
-        print(f"\nNo S&P 500 data or error for period {test_start_date} to {test_end_date}.")
+    tickers_to_test = ["GC=F", "^GSPC", "BTC-USD", "MSFT"]
+    for test_ticker in tickers_to_test:
+        print(f"\nFetching data for {test_ticker}...")
+        df = fetch_historical_data(test_ticker, test_start_date, test_end_date, "15m")
+        if not df.empty:
+            print(f"\n{test_ticker} Data (first 3 rows):")
+            print(df.head(3))
+            print(f"Columns: {df.columns.tolist()}")
+            print(f"Timezone: {df.index.tz}")
+        else:
+            print(f"\nNo {test_ticker} data or error for period {test_start_date} to {test_end_date}.")
 
