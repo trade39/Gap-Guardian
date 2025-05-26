@@ -5,11 +5,6 @@ Application-wide constants and default parameters.
 import pytz
 
 # Default Tickers for yfinance
-# XAUUSD (Gold): "GC=F"
-# S&P 500: "^GSPC"
-# NASDAQ: "^IXIC"
-# EURUSD: "EURUSD=X"
-# BTCUSD: "BTC-USD"
 DEFAULT_TICKERS = {
     "Gold (XAU/USD)": "GC=F",
     "S&P 500 Index": "^GSPC",
@@ -20,23 +15,20 @@ DEFAULT_TICKERS = {
 
 # Default Backtesting Parameters
 DEFAULT_INITIAL_CAPITAL = 100000.0
-DEFAULT_RISK_PER_TRADE_PERCENT = 0.5  # 0.5%
-DEFAULT_STOP_LOSS_POINTS = 15.0 # This is in price points of the asset
-DEFAULT_RRR = 3.0 # Risk-Reward Ratio (Take Profit = RRR * Stop Loss)
+DEFAULT_RISK_PER_TRADE_PERCENT = 0.5
+DEFAULT_STOP_LOSS_POINTS = 15.0
+DEFAULT_RRR = 3.0
 
 # Strategy Time Settings
 STRATEGY_TIME_FRAME = "15m"
-# New York Timezone
 NY_TIMEZONE_STR = "America/New_York"
 NY_TIMEZONE = pytz.timezone(NY_TIMEZONE_STR)
-# Entry window in NY time
 ENTRY_WINDOW_START_HOUR = 9
 ENTRY_WINDOW_START_MINUTE = 30
 ENTRY_WINDOW_END_HOUR = 11
 ENTRY_WINDOW_END_MINUTE = 0
 
 # Data Fetching
-# Max 60 days for 15m interval from yfinance
 MAX_INTRADAY_DAYS = 60
 
 # Plotting
@@ -44,7 +36,13 @@ PLOTLY_TEMPLATE = "plotly_white" # "plotly", "plotly_white", "plotly_dark", "ggp
 
 # Logging
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-LOG_LEVEL = 'INFO' # 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'
+LOG_LEVEL = 'INFO'
 
 # UI
 APP_TITLE = "Gap Guardian Strategy Backtester"
+
+# Metric Colors (Ensure these contrast well with your dark theme's secondaryBackgroundColor)
+POSITIVE_METRIC_COLOR = "#28a745"  # Green
+NEGATIVE_METRIC_COLOR = "#dc3545"  # Red
+NEUTRAL_METRIC_COLOR = "#FAFAFA"   # Light gray/White (should match theme's textColor)
+
