@@ -3,7 +3,6 @@
 /* General body styling (applied if Streamlit allows global body styling, often scoped) */
 body {
     font-family: 'Inter', sans-serif; /* Ensure Inter is loaded or use a common sans-serif */
-    /* Default text color for light mode, dark mode will be handled by config.toml or specific overrides */
 }
 
 /* Custom Streamlit component styling */
@@ -14,7 +13,6 @@ body {
 /* Sidebar styling */
 div[data-testid="stSidebar"] {
     /* Sidebar background will be controlled by Streamlit's theme (config.toml) */
-    /* border-right: 1px solid #444; */ /* Example for dark theme if needed */
 }
 
 h1, h2, h3 {
@@ -24,15 +22,13 @@ h1, h2, h3 {
 /* Button styling */
 .stButton>button {
     border-radius: 8px;
-    /* background-color and color will be largely controlled by Streamlit's theme (primaryColor) */
     padding: 10px 20px;
-    border: none; /* Consider a subtle border for dark mode if needed */
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* This shadow might need adjustment for dark themes if it looks off */
     transition: background-color 0.3s ease;
 }
 
 .stButton>button:hover {
-    /* Hover effects can be fine-tuned here if Streamlit's theme isn't enough */
     cursor: pointer;
 }
 
@@ -42,64 +38,41 @@ h1, h2, h3 {
 .stDateInput>div>div>input,
 .stSelectbox>div>div {
     border-radius: 6px;
-    /* Border color can be influenced by Streamlit theme or overridden here */
-    /* border: 1px solid #555; */ /* Example for dark theme */
 }
 
 /* Dataframe styling */
 .stDataFrame {
     border-radius: 8px;
-    overflow: hidden; /* Ensures border radius is applied to table corners */
+    overflow: hidden;
 }
 
 /* Metric container styling */
 div[data-testid="stMetric"] {
-    background-color: #FFFFFF; /* Explicitly White background for metric cards */
+    /* background-color: #FFFFFF; */ /* REMOVED: No explicit white background for metric cards */
+    /* The background will now be inherited from the parent, likely secondaryBackgroundColor from config.toml */
     border-radius: 8px;
     padding: 15px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-    border: 1px solid #E0E0E0; /* Light border for definition, visible on dark page backgrounds */
+    /* Consider adjusting or removing the border if it doesn't look good on a dark background */
+    border: 1px solid #2A2D3A; /* A slightly lighter border for dark themes, or remove if preferred */
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05); /* Shadow might be less visible on dark, adjust if needed */
 }
 
 div[data-testid="stMetricLabel"] {
     font-weight: bold;
-    color: #4F4F4F; /* Dark gray for label text - readable on the white metric card */
+    color: #A0A0A0; /* Light gray for label text - readable on dark background */
+    /* Streamlit's default theme might also provide a good text color, so this can be optional */
 }
 
 div[data-testid="stMetricValue"] {
-    font-size: 1.5em; /* Larger font for the metric value */
-    color: #1C1C1C; /* Very dark gray/almost black for value text - readable on the white metric card */
+    font-size: 1.5em;
+    color: #FAFAFA; /* White or very light gray for value text - readable on dark background */
+    /* Streamlit's default theme textColor should also work well here */
 }
-
-
-/* --- Dark Theme Overrides (Example - more robust theming via config.toml or JS) --- */
-/* Most dark theme base styling should be handled by .streamlit/config.toml.
-   Use this section for specific overrides that config.toml cannot achieve.
-   For instance, if Streamlit applies a body class like 'dark-mode' or similar,
-   you could use it:
-*/
-/*
-body[data-theme="dark"] div[data-testid="stMetric"] {
-    background-color: #2A2A2E; // If you wanted metric cards to be dark in dark mode
-    border: 1px solid #383838;
-}
-body[data-theme="dark"] div[data-testid="stMetricLabel"] {
-    color: #AAAAAA; // Text would need to be light if card is dark
-}
-body[data-theme="dark"] div[data-testid="stMetricValue"] {
-    color: #BB86FC; // Text would need to be light if card is dark
-}
-*/
-/* However, the current fix makes metric cards always white with dark text,
-   which is simpler and works across themes for these specific elements. */
-
 
 /* Ensure Inter font is available */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 /* Apply Inter font globally if not overridden by Streamlit's theme */
-/* Streamlit's config.toml is the preferred way to set the global font.
-   This can serve as a fallback or for elements not covered. */
 body, .stApp, .stTextInput, .stButton, .stSelectbox, .stNumberInput, .stDateInput {
     font-family: 'Inter', sans-serif !important;
 }
