@@ -1,13 +1,14 @@
 # utils/plotting.py
 """
 Functions for creating visualizations using Plotly.
+Handles duplicate entries in optimization results for heatmap generation.
 """
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 from config.settings import PLOTLY_TEMPLATE
-from utils.logger import get_logger # Added logger import
+from utils.logger import get_logger
 
 # Instantiate logger
 logger = get_logger(__name__)
@@ -108,10 +109,13 @@ def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol:
 
 def plot_optimization_heatmap(
     optimization_results_df: pd.DataFrame,
-    param1_name: str, param2_name: str, metric_name: str
+    param1_name: str,  # Typically the column for x-axis (e.g., 'SL Points')
+    param2_name: str,  # Typically the index for y-axis (e.g., 'RRR')
+    metric_name: str   # The value to be shown in the heatmap cells
 ) -> go.Figure:
     """
     Generates a heatmap for visualizing optimization results between two parameters.
+    Handles duplicate index/column entries by averaging the metric.
 
     Args:
         optimization_results_df (pd.DataFrame): DataFrame of optimization results.
@@ -128,11 +132,49 @@ def plot_optimization_heatmap(
         fig.update_layout(title=f"Insufficient Data for Heatmap ({metric_name})", height=400, template=PLOTLY_TEMPLATE)
         fig.add_annotation(text="Not enough data or missing columns for heatmap generation.", showarrow=False)
         return fig
+
     try:
-        # Pivot the data to create a matrix for the heatmap
-        heatmap_data = optimization_results_df.pivot(index=param2_name, columns=param1_name, values=metric_name)
+        # Ensure param1_name and param2_name exist
+        if param1_name not in optimization_results_df.columns:
+            raise ValueError(f"Parameter '{param1_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
+        if param2_name not in optimization_results_df.columns:
+            raise ValueError(f"Parameter '{param2_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
+        if metric_name not in optimization_results_df.columns:
+             raise ValueError(f"Metric '{metric_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
+
+
+        # Handle potential duplicate (param1_name, param2_name) combinations by averaging the metric
+        # This is crucial for the pivot operation to succeed.
+        # We group by the two parameters that will form the axes of the heatmap
+        # and then select the metric_name, taking the mean.
+        # .reset_index() is called to turn the grouped Series back into a DataFrame suitable for pivot.
+        
+        logger.debug(f"Original optimization_results_df for heatmap (head):\n{optimization_results_df[[param1_name, param2_name, metric_name]].head()}")
+
+        # Check for NaN values in grouping columns before aggregation
+        if optimization_results_df[[param1_name, param2_name]].isnull().any().any():
+            logger.warning(f"NaN values found in grouping columns ('{param1_name}', '{param2_name}') for heatmap. Dropping rows with NaNs in these columns.")
+            cleaned_df = optimization_results_df.dropna(subset=[param1_name, param2_name])
+        else:
+            cleaned_df = optimization_results_df
+        
+        if cleaned_df.empty:
+            logger.warning("DataFrame became empty after attempting to clean NaNs from grouping columns for heatmap.")
+            fig = go.Figure()
+            fig.update_layout(title=f"No Valid Data for Heatmap ({metric_name}) after NaN cleaning", height=400, template=PLOTLY_TEMPLATE)
+            fig.add_annotation(text="Data became empty after cleaning NaNs from axis parameters.", showarrow=False)
+            return fig
+
+        # Aggregate duplicate entries
+        aggregated_df = cleaned_df.groupby([param2_name, param1_name], as_index=False)[metric_name].mean()
+        logger.debug(f"Aggregated_df for heatmap (head):\n{aggregated_df.head()}")
+
+        # Pivot the aggregated data to create a matrix for the heatmap
+        heatmap_data = aggregated_df.pivot(index=param2_name, columns=param1_name, values=metric_name)
+        
         # Sort index (param2_name, typically RRR) in descending order for conventional heatmap display
         heatmap_data = heatmap_data.sort_index(ascending=False) 
+        logger.debug(f"Pivoted heatmap_data (head):\n{heatmap_data.head()}")
         
         fig = px.imshow(heatmap_data, 
                         labels=dict(x=param1_name, y=param2_name, color=metric_name),
@@ -153,6 +195,6 @@ def plot_optimization_heatmap(
     except Exception as e:
         logger.error(f"Error creating heatmap for metric '{metric_name}' with params '{param1_name}', '{param2_name}': {e}", exc_info=True)
         fig = go.Figure()
-        fig.update_layout(title=f"Error Generating Heatmap: Review Logs", height=400, template=PLOTLY_TEMPLATE) # User-friendly error
+        fig.update_layout(title=f"Error Generating Heatmap: Review Logs", height=400, template=PLOTLY_TEMPLATE)
         fig.add_annotation(text=f"Could not generate heatmap. Details: {str(e)}", showarrow=False)
     return fig
