@@ -3,6 +3,7 @@
 Performs parameter optimization for trading strategies using Grid Search, Random Search,
 and Walk-Forward Optimization (WFO).
 Corrected handling of parameter dictionaries and WFO loop logic.
+Added missing aggregated average trade metrics for WFO.
 """
 import pandas as pd
 import numpy as np
@@ -17,26 +18,23 @@ from config import settings
 logger = get_logger(__name__)
 
 def _calculate_daily_returns(equity_series: pd.Series) -> pd.Series:
-    if equity_series.empty or equity_series.nunique() <= 1: # Handle flat or single-point equity
+    if equity_series.empty or equity_series.nunique() <= 1:
         return pd.Series(dtype=float)
-    daily_equity = equity_series.resample('D').last().ffill()
-    daily_returns = daily_equity.pct_change().fillna(0)
+    daily_equity = equity_series.resample('D').last().ffill(); daily_returns = daily_equity.pct_change().fillna(0)
     return daily_returns
 
 def calculate_sharpe_ratio(returns_series, risk_free_rate=settings.RISK_FREE_RATE, trading_days_per_year=settings.TRADING_DAYS_PER_YEAR):
-    if returns_series.empty or len(returns_series) < max(2, settings.MIN_TRADES_FOR_METRICS) or returns_series.std() == 0: # Need at least 2 points for std
-        return np.nan
+    if returns_series.empty or len(returns_series) < max(2, settings.MIN_TRADES_FOR_METRICS) or returns_series.std() == 0: return np.nan
     excess_returns = returns_series - (risk_free_rate / trading_days_per_year)
     sharpe = excess_returns.mean() / excess_returns.std()
     return sharpe * np.sqrt(trading_days_per_year)
 
 def calculate_sortino_ratio(returns_series, risk_free_rate=settings.RISK_FREE_RATE, trading_days_per_year=settings.TRADING_DAYS_PER_YEAR):
-    if returns_series.empty or len(returns_series) < max(2, settings.MIN_TRADES_FOR_METRICS):
-        return np.nan
+    if returns_series.empty or len(returns_series) < max(2, settings.MIN_TRADES_FOR_METRICS): return np.nan
     target_return = risk_free_rate / trading_days_per_year; excess_returns = returns_series - target_return
     downside_returns = excess_returns[excess_returns < 0]
     if downside_returns.empty or downside_returns.std() == 0:
-        return np.inf if excess_returns.mean() > 0 else np.nan # If no downside, but positive mean -> inf
+        return np.inf if excess_returns.mean() > 0 else np.nan
     downside_std = downside_returns.std(); sortino = excess_returns.mean() / downside_std
     return sortino * np.sqrt(trading_days_per_year)
 
@@ -51,23 +49,26 @@ def _run_single_backtest_for_optimization(
     signals_df = strategy_engine.generate_signals(price_data.copy(), sl, rrr, entry_start_time, entry_end_time)
     trades_df, equity_s, perf_metrics = backtester.run_backtest(price_data.copy(), signals_df, initial_capital, risk_per_trade_percent, sl, data_interval_str)
     daily_ret = _calculate_daily_returns(equity_s)
-    
-    # Ensure all keys are present even if metrics are NaN
     result = {
         'SL Points': sl, 'RRR': rrr,
         'EntryStartHour': entry_start_time.hour, 'EntryStartMinute': entry_start_time.minute,
         'EntryEndHour': entry_end_time.hour, 'EntryEndMinute': entry_end_time.minute,
-        'Total P&L': perf_metrics.get('Total P&L', np.nan), # Use np.nan for missing numeric metrics
+        'Total P&L': perf_metrics.get('Total P&L', np.nan),
         'Profit Factor': perf_metrics.get('Profit Factor', np.nan),
         'Win Rate': perf_metrics.get('Win Rate', np.nan),
         'Max Drawdown (%)': perf_metrics.get('Max Drawdown (%)', np.nan),
-        'Total Trades': perf_metrics.get('Total Trades', 0), # Trades can be 0
+        'Total Trades': perf_metrics.get('Total Trades', 0),
         'Sharpe Ratio (Annualized)': calculate_sharpe_ratio(daily_ret),
         'Sortino Ratio (Annualized)': calculate_sortino_ratio(daily_ret),
+        # Include these for potential aggregation or detailed fold analysis
+        'Average Trade P&L': perf_metrics.get('Average Trade P&L', np.nan),
+        'Average Winning Trade': perf_metrics.get('Average Winning Trade', np.nan),
+        'Average Losing Trade': perf_metrics.get('Average Losing Trade', np.nan),
         '_trades_df': trades_df, '_equity_series': equity_s
     }
     return result
 
+# ... (run_grid_search and run_random_search remain the same as the last correct version)
 def run_grid_search(
     price_data: pd.DataFrame, initial_capital: float, risk_per_trade_percent: float,
     param_value_map: dict, data_interval_str: str, progress_callback=None
@@ -75,7 +76,7 @@ def run_grid_search(
     param_names = list(param_value_map.keys())
     value_combinations = list(itertools.product(*(param_value_map[name] for name in param_names)))
     total_combinations = len(value_combinations)
-    if total_combinations == 0: return pd.DataFrame() # No combinations to test
+    if total_combinations == 0: return pd.DataFrame()
     logger.info(f"Grid Search: Parameters: {param_names}. Combinations: {total_combinations}. Interval: {data_interval_str}")
     results = []
     for i, combo_values in enumerate(value_combinations):
@@ -127,6 +128,7 @@ def run_random_search(
         if progress_callback: progress_callback((i + 1) / num_iterations, "Random Search")
     return pd.DataFrame(results)
 
+
 def run_walk_forward_optimization(
     full_price_data: pd.DataFrame, initial_capital: float, risk_per_trade_percent: float,
     wfo_params: dict, opt_algo: str, opt_control_config: dict, 
@@ -153,16 +155,11 @@ def run_walk_forward_optimization(
     all_oos_trades, all_oos_equity_segments, wfo_log = [], [], []
     current_in_sample_start_date = start_date_overall; fold_num = 0
     
-    # Estimate total folds for progress bar
-    num_possible_starts = 0
-    temp_start = start_date_overall
+    num_possible_starts = 0; temp_start = start_date_overall
     while temp_start + timedelta(days=in_sample_days - 1) <= end_date_overall:
-        # Check if an OOS period can also be formed
-        if temp_start + timedelta(days=in_sample_days - 1 + 1) <= end_date_overall : # At least 1 day for OOS start
-             num_possible_starts += 1
+        if temp_start + timedelta(days=in_sample_days - 1 + 1) <= end_date_overall : num_possible_starts += 1
         temp_start += timedelta(days=step_days)
     total_folds_estimate = max(1, num_possible_starts)
-
 
     while current_in_sample_start_date + timedelta(days=in_sample_days - 1) <= end_date_overall:
         fold_num += 1
@@ -170,16 +167,14 @@ def run_walk_forward_optimization(
         current_oos_start_date = current_in_sample_end_date + timedelta(days=1)
         current_oos_end_date = current_oos_start_date + timedelta(days=out_of_sample_days - 1)
 
-        if current_oos_start_date > end_date_overall: # No OOS period possible
-            logger.info(f"WFO Fold {fold_num}: OOS period starts ({current_oos_start_date}) after all data ({end_date_overall}). Ending WFO.")
-            break
-        if current_oos_end_date > end_date_overall: current_oos_end_date = end_date_overall # Truncate OOS
+        if current_oos_start_date > end_date_overall: logger.info(f"WFO Fold {fold_num}: OOS period starts ({current_oos_start_date}) after all data ({end_date_overall}). Ending WFO."); break
+        if current_oos_end_date > end_date_overall: current_oos_end_date = end_date_overall
 
         logger.info(f"WFO Fold {fold_num}/{total_folds_estimate}: IS [{current_in_sample_start_date} - {current_in_sample_end_date}], OOS [{current_oos_start_date} - {current_oos_end_date}]")
         
         in_sample_data = full_price_data[(full_price_data.index.date >= current_in_sample_start_date) & (full_price_data.index.date <= current_in_sample_end_date)]
         out_of_sample_data = pd.DataFrame()
-        if current_oos_start_date <= current_oos_end_date: # Valid OOS date range
+        if current_oos_start_date <= current_oos_end_date:
             out_of_sample_data = full_price_data[(full_price_data.index.date >= current_oos_start_date) & (full_price_data.index.date <= current_oos_end_date)]
 
         if in_sample_data.empty:
@@ -232,7 +227,6 @@ def run_walk_forward_optimization(
     
     chained_oos_equity = pd.Series(dtype=float); current_chained_capital_val = initial_capital
     if not final_oos_trades_df.empty:
-        # ... (Chained equity logic as before, ensure robust start date for temp_equity_dates)
         final_oos_trades_df_sorted = final_oos_trades_df.sort_values(by='EntryTime').reset_index(drop=True)
         start_equity_dt = final_oos_trades_df_sorted['EntryTime'].dropna().min() - pd.Timedelta(microseconds=1) if not final_oos_trades_df_sorted.empty and not final_oos_trades_df_sorted['EntryTime'].dropna().empty else (full_price_data.index.min() - pd.Timedelta(microseconds=1) if not full_price_data.empty else pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=1, microseconds=1))
         temp_eq_vals = [initial_capital]; temp_eq_dts = [start_equity_dt]
@@ -250,20 +244,41 @@ def run_walk_forward_optimization(
     elif not full_price_data.empty: chained_oos_equity = pd.Series([initial_capital], index=[full_price_data.index.min()])
     else: chained_oos_equity = pd.Series([initial_capital], index=[pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=1)])
 
-    aggregated_oos_perf = {}
-    if not final_oos_trades_df.empty and not chained_oos_equity.empty and chained_oos_equity.notna().any():
-        # ... (Aggregated OOS performance calculation as before) ...
-        aggregated_oos_perf['Total Trades'] = len(final_oos_trades_df); aggregated_oos_perf['Total P&L'] = final_oos_trades_df['P&L'].sum()
-        aggregated_oos_perf['Final Capital'] = chained_oos_equity.iloc[-1] if not chained_oos_equity.empty else initial_capital
-        daily_oos_ret_chained = _calculate_daily_returns(chained_oos_equity)
-        aggregated_oos_perf['Sharpe Ratio (Annualized)'] = calculate_sharpe_ratio(daily_oos_ret_chained)
-        aggregated_oos_perf['Sortino Ratio (Annualized)'] = calculate_sortino_ratio(daily_oos_ret_chained)
-        cum_max = chained_oos_equity.cummax(); dd = (chained_oos_equity - cum_max) / cum_max
-        aggregated_oos_perf['Max Drawdown (%)'] = dd.min() * 100 if dd.notna().any() and not dd.empty else 0
-        num_win = len(final_oos_trades_df[final_oos_trades_df['P&L'] > 0])
-        aggregated_oos_perf['Win Rate'] = (num_win / len(final_oos_trades_df) * 100) if len(final_oos_trades_df) > 0 else 0
-        gp = final_oos_trades_df[final_oos_trades_df['P&L'] > 0]['P&L'].sum(); gl = final_oos_trades_df[final_oos_trades_df['P&L'] < 0]['P&L'].sum()
-        aggregated_oos_perf['Profit Factor'] = abs(gp / gl) if gl != 0 else np.inf if gp > 0 else 0
+    # Calculate aggregated OOS performance
+    aggregated_oos_perf = { # Initialize with defaults for N/A cases
+        'Total Trades': 0, 'Total P&L': np.nan, 'Final Capital': initial_capital,
+        'Sharpe Ratio (Annualized)': np.nan, 'Sortino Ratio (Annualized)': np.nan,
+        'Max Drawdown (%)': 0.0, 'Win Rate': 0.0, 'Profit Factor': 0.0,
+        'Average Trade P&L': np.nan, 'Average Winning Trade': np.nan, 'Average Losing Trade': np.nan
+    }
+    if not final_oos_trades_df.empty:
+        aggregated_oos_perf['Total Trades'] = len(final_oos_trades_df)
+        aggregated_oos_perf['Total P&L'] = final_oos_trades_df['P&L'].sum()
         
-    logger.info(f"WFO complete. Processed {fold_num} folds.")
+        if not chained_oos_equity.empty and chained_oos_equity.notna().any():
+            aggregated_oos_perf['Final Capital'] = chained_oos_equity.iloc[-1]
+            daily_oos_ret_chained = _calculate_daily_returns(chained_oos_equity)
+            aggregated_oos_perf['Sharpe Ratio (Annualized)'] = calculate_sharpe_ratio(daily_oos_ret_chained)
+            aggregated_oos_perf['Sortino Ratio (Annualized)'] = calculate_sortino_ratio(daily_oos_ret_chained)
+            cum_max = chained_oos_equity.cummax(); dd = (chained_oos_equity - cum_max) / cum_max
+            aggregated_oos_perf['Max Drawdown (%)'] = dd.min() * 100 if dd.notna().any() and not dd.empty else 0.0
+        else: # Fallback if chained equity is problematic but trades exist
+            aggregated_oos_perf['Final Capital'] = initial_capital + aggregated_oos_perf['Total P&L']
+            # Sharpe, Sortino, MDD would be harder to calculate accurately without good chained equity
+
+        num_winning = len(final_oos_trades_df[final_oos_trades_df['P&L'] > 0])
+        num_losing = len(final_oos_trades_df[final_oos_trades_df['P&L'] < 0])
+        aggregated_oos_perf['Win Rate'] = (num_winning / aggregated_oos_perf['Total Trades'] * 100) if aggregated_oos_perf['Total Trades'] > 0 else 0.0
+        
+        if aggregated_oos_perf['Total Trades'] > 0:
+            aggregated_oos_perf['Average Trade P&L'] = final_oos_trades_df['P&L'].mean()
+        if num_winning > 0:
+            aggregated_oos_perf['Average Winning Trade'] = final_oos_trades_df[final_oos_trades_df['P&L'] > 0]['P&L'].mean()
+        if num_losing > 0:
+            aggregated_oos_perf['Average Losing Trade'] = final_oos_trades_df[final_oos_trades_df['P&L'] < 0]['P&L'].mean()
+
+        gp = final_oos_trades_df[final_oos_trades_df['P&L'] > 0]['P&L'].sum(); gl = final_oos_trades_df[final_oos_trades_df['P&L'] < 0]['P&L'].sum()
+        aggregated_oos_perf['Profit Factor'] = abs(gp / gl) if gl != 0 else np.inf if gp > 0 else 0.0
+        
+    logger.info(f"WFO complete. Processed {fold_num} folds.") # Corrected to fold_num from fold_num-1
     return wfo_log_df, final_oos_trades_df, chained_oos_equity, aggregated_oos_perf
