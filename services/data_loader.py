@@ -8,17 +8,12 @@ import streamlit as st
 from datetime import datetime, timedelta, date
 from config.settings import (
     MAX_SHORT_INTRADAY_DAYS, MAX_HOURLY_INTRADAY_DAYS,
-    NY_TIMEZONE_STR, NY_TIMEZONE
+    NY_TIMEZONE_STR, NY_TIMEZONE,
+    YFINANCE_SHORT_INTRADAY_INTERVALS, YFINANCE_HOURLY_INTERVALS # Added imports
 )
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# yfinance interval categories for history limits
-YFINANCE_SHORT_INTRADAY_INTERVALS = ["1m", "2m", "5m", "15m", "30m"] # Typically up to 60 days
-YFINANCE_HOURLY_INTERVALS = ["60m", "1h", "90m"] # "1h", "90m" often up to 730 days. "60m" can be like shorter ones.
-                                                # Let's treat "60m" and "1h" as potentially longer.
-                                                # "90m" is also available.
 
 # @st.cache_data(ttl=3600) # Consider re-enabling after thorough testing
 def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: date, interval: str) -> pd.DataFrame:
@@ -30,19 +25,15 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
         logger.error(f"Initial validation failed: Start date {current_start_date} must be before end date {end_date_input} for {ticker}.")
         return pd.DataFrame()
 
-    # Determine max history days based on interval
     max_history_days = None
-    if interval in YFINANCE_SHORT_INTRADAY_INTERVALS:
+    if interval in YFINANCE_SHORT_INTRADAY_INTERVALS: # Now correctly uses imported list
         max_history_days = MAX_SHORT_INTRADAY_DAYS
-    elif interval in YFINANCE_HOURLY_INTERVALS: # e.g., "1h"
+    elif interval in YFINANCE_HOURLY_INTERVALS: # Now correctly uses imported list
         max_history_days = MAX_HOURLY_INTRADAY_DAYS
-    # For daily ("1d"), weekly ("1wk"), monthly ("1mo"), max_history_days is None (effectively unlimited for practical purposes)
 
     if max_history_days is not None:
-        # Using NY_TIMEZONE for datetime.now() to be consistent if strategy times are NY based.
         max_permissible_start_datetime = datetime.now(NY_TIMEZONE) - timedelta(days=max_history_days)
         max_permissible_start_date = max_permissible_start_datetime.date()
-
         if current_start_date < max_permissible_start_date:
             logger.warning(
                 f"Requested start date {current_start_date} for {ticker} ({interval}) is too old. "
@@ -93,7 +84,7 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             return pd.DataFrame()
 
         if data.index.tz is None:
-            try: data = data.tz_localize('UTC') # Default assumption for naive daily/older data
+            try: data = data.tz_localize('UTC')
             except Exception as tz_err:
                 logger.error(f"Could not localize naive DatetimeIndex to UTC for {ticker}: {tz_err}", exc_info=True)
                 st.error(f"Error localizing timezone for {ticker}.")
@@ -105,14 +96,10 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
             st.error(f"Error converting data to New York time for {ticker}.")
             return pd.DataFrame()
 
-        # Final filter to ensure data is strictly within user's requested end_date_input (inclusive at date level)
-        # Convert end_date_input to a timezone-aware datetime at the end of that day for comparison
         end_datetime_inclusive = pd.Timestamp(end_date_input, tz=NY_TIMEZONE_STR) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
         data = data[data.index <= end_datetime_inclusive]
-        # Also ensure start date is respected (yf might give slightly earlier data for some intervals)
         start_datetime_inclusive = pd.Timestamp(current_start_date, tz=NY_TIMEZONE_STR)
         data = data[data.index >= start_datetime_inclusive]
-
 
         if data.empty:
             logger.warning(f"Data for {ticker} became empty after final date/time filtering (User range: {start_date_input} to {end_date_input}).")
@@ -132,4 +119,3 @@ def fetch_historical_data(ticker: str, start_date_input: date, end_date_input: d
         logger.error(f"General error in fetch_historical_data for {ticker} ({interval}): {e}", exc_info=True)
         st.error(f"Failed to fetch/process data for {ticker}. Details: {e}")
         return pd.DataFrame()
-
