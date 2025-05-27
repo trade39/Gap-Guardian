@@ -5,6 +5,7 @@ Handles UI, user inputs, and orchestrates the backtesting process,
 including optimization of SL, RRR, and Entry Window Times, and Walk-Forward Optimization (WFO).
 The selected data timeframe (current_interval) is now passed to all relevant backend functions.
 Corrected parameter key handling for optimizer.
+Improved state reset and tab handling for robustness on re-runs.
 """
 import streamlit as st
 import pandas as pd
@@ -24,171 +25,211 @@ def load_custom_css(css_file_path):
     except Exception as e: st.warning(f"CSS file not found or error: {e}")
 load_custom_css("static/style.css")
 
-def init_session_state():
+# This function initializes session state keys if they don't exist.
+# It's called once at the start of the script.
+def initialize_app_session_state():
     defaults = {
         'backtest_results': None, 'optimization_results_df': pd.DataFrame(),
         'price_data': pd.DataFrame(), 'signals': pd.DataFrame(),
         'best_params_from_opt': None, 'wfo_results': None,
-        'selected_timeframe': settings.DEFAULT_STRATEGY_TIMEFRAME,
+        'selected_timeframe_value': settings.DEFAULT_STRATEGY_TIMEFRAME, # Store the value, not display name
         'current_analysis_mode_for_tabs': None,
-        'current_timeframe_for_tabs': None
+        'current_timeframe_for_tabs': None,
+        'main_display_tabs_objects': None, # Store the tab objects themselves
+        'main_display_tabs_config_tuple': None, # Store (tab_names_list, analysis_mode, timeframe)
+        'run_analysis_clicked_count': 0 # To help differentiate runs if needed for complex keying
     }
     for key, value in defaults.items():
-        if key not in st.session_state: st.session_state[key] = value
-init_session_state()
+        if key not in st.session_state:
+            st.session_state[key] = value
+initialize_app_session_state()
+
 
 # --- Sidebar Inputs ---
 st.sidebar.header("Backtest Configuration")
-selected_ticker_name = st.sidebar.selectbox("Select Symbol:", options=list(settings.DEFAULT_TICKERS.keys()), index=0, key="ticker_sel_v5")
+selected_ticker_name = st.sidebar.selectbox("Select Symbol:", options=list(settings.DEFAULT_TICKERS.keys()), index=0, key="ticker_sel_v6")
 ticker_symbol = settings.DEFAULT_TICKERS[selected_ticker_name]
+
+# Timeframe Selection - Get the display name for the current value in session state
+current_tf_value_in_state = st.session_state.selected_timeframe_value
+default_tf_display_index = 0
+if current_tf_value_in_state in settings.AVAILABLE_TIMEFRAMES.values():
+    default_tf_display_index = list(settings.AVAILABLE_TIMEFRAMES.values()).index(current_tf_value_in_state)
 
 selected_timeframe_display = st.sidebar.selectbox(
     "Select Timeframe:", options=list(settings.AVAILABLE_TIMEFRAMES.keys()),
-    index=list(settings.AVAILABLE_TIMEFRAMES.values()).index(st.session_state.selected_timeframe),
-    key="timeframe_selector_ui_main_v5",
+    index=default_tf_display_index, # Use the found index
+    key="timeframe_selector_ui_main_v6",
     help="Select data timeframe. Shorter timeframes have limited historical data."
 )
-st.session_state.selected_timeframe = settings.AVAILABLE_TIMEFRAMES[selected_timeframe_display]
-current_interval = st.session_state.selected_timeframe
+# Update session state with the actual value ('15m', '1h', etc.) from the selection
+st.session_state.selected_timeframe_value = settings.AVAILABLE_TIMEFRAMES[selected_timeframe_display]
+# current_interval will be read from st.session_state.selected_timeframe_value inside button click
+
+# --- Date Inputs (Dynamic based on selected_timeframe_value) ---
+# This logic needs to run on every script execution to set date input defaults correctly
+# based on the *current* timeframe selection from the UI.
+active_current_interval = st.session_state.selected_timeframe_value # Use the value from session state
 
 today = date.today()
 max_history_limit_days = None
-if current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS: max_history_limit_days = settings.MAX_SHORT_INTRADAY_DAYS
-elif current_interval in settings.YFINANCE_HOURLY_INTERVALS: max_history_limit_days = settings.MAX_HOURLY_INTRADAY_DAYS
+if active_current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS: max_history_limit_days = settings.MAX_SHORT_INTRADAY_DAYS
+elif active_current_interval in settings.YFINANCE_HOURLY_INTERVALS: max_history_limit_days = settings.MAX_HOURLY_INTRADAY_DAYS
 
 if max_history_limit_days:
     min_allowable_start_date_for_ui = today - timedelta(days=max_history_limit_days -1)
-    date_input_help_suffix = f"Data for {current_interval} is limited to ~{max_history_limit_days} days."
+    date_input_help_suffix = f"Data for {active_current_interval} is limited to ~{max_history_limit_days} days."
 else:
     min_allowable_start_date_for_ui = today - timedelta(days=365 * 10)
     date_input_help_suffix = "Select historical period."
 
 default_start_offset = 30
-if current_interval in ["1m", "5m", "15m", "30m", "1h", "60m", "90m"]:
+if active_current_interval in ["1m", "5m", "15m", "30m", "1h", "60m", "90m"]:
     default_start_date_value = today - timedelta(days=min(15, max_history_limit_days -1 if max_history_limit_days else 15))
 else:
-    default_start_date_value = today - timedelta(days=default_start_offset * 7 if current_interval == "1wk" else default_start_offset)
+    default_start_date_value = today - timedelta(days=default_start_offset * 7 if active_current_interval == "1wk" else default_start_offset)
 
 if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
 max_possible_start_date = today - timedelta(days=1)
 if default_start_date_value > max_possible_start_date: default_start_date_value = max_possible_start_date
 if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
 
-start_date = st.sidebar.date_input("Start Date:", value=default_start_date_value, min_value=min_allowable_start_date_for_ui, max_value=max_possible_start_date, key=f"start_date_{current_interval}_v5", help=f"Start date. {date_input_help_suffix}")
-min_end_date_value = start_date + timedelta(days=1) if start_date else min_allowable_start_date_for_ui + timedelta(days=1)
-default_end_date_value = today
-if default_end_date_value < min_end_date_value: default_end_date_value = min_end_date_value
-if default_end_date_value > today: default_end_date_value = today
-end_date = st.sidebar.date_input("End Date:", value=default_end_date_value, min_value=min_end_date_value, max_value=today, key=f"end_date_{current_interval}_v5", help=f"End date. {date_input_help_suffix}")
+# Use a key that changes with the interval to force re-render of date inputs if interval changes
+start_date_key = f"start_date_widget_{active_current_interval}"
+end_date_key = f"end_date_widget_{active_current_interval}"
 
-initial_capital = st.sidebar.number_input("Initial Capital ($):", 1000.0, value=settings.DEFAULT_INITIAL_CAPITAL, step=1000.0, format="%.2f")
-risk_per_trade_percent = st.sidebar.number_input("Risk per Trade (%):", 0.1, 10.0, value=settings.DEFAULT_RISK_PER_TRADE_PERCENT, step=0.1, format="%.1f")
+start_date_ui = st.sidebar.date_input("Start Date:", value=default_start_date_value, min_value=min_allowable_start_date_for_ui, max_value=max_possible_start_date, key=start_date_key, help=f"Start date. {date_input_help_suffix}")
+min_end_date_value_ui = start_date_ui + timedelta(days=1) if start_date_ui else min_allowable_start_date_for_ui + timedelta(days=1)
+default_end_date_value_ui = today
+if default_end_date_value_ui < min_end_date_value_ui: default_end_date_value_ui = min_end_date_value_ui
+if default_end_date_value_ui > today: default_end_date_value_ui = today
+end_date_ui = st.sidebar.date_input("End Date:", value=default_end_date_value_ui, min_value=min_end_date_value_ui, max_value=today, key=end_date_key, help=f"End date. {date_input_help_suffix}")
+
+# ... (Rest of sidebar inputs: initial_capital, risk_per_trade_percent, manual strategy params, analysis_mode, optimization params, WFO params) ...
+# (Using simplified variable names for UI inputs for clarity here)
+initial_capital_ui = st.sidebar.number_input("Initial Capital ($):", 1000.0, value=settings.DEFAULT_INITIAL_CAPITAL, step=1000.0, format="%.2f")
+risk_per_trade_percent_ui = st.sidebar.number_input("Risk per Trade (%):", 0.1, 10.0, value=settings.DEFAULT_RISK_PER_TRADE_PERCENT, step=0.1, format="%.1f")
 
 st.sidebar.subheader("Strategy Parameters (Manual / Optimization Base)")
-sl_points_single_ui = st.sidebar.number_input("SL (points):", 0.1, value=settings.DEFAULT_STOP_LOSS_POINTS, step=0.1, format="%.2f", key="sl_s_man_v5")
-rrr_single_ui = st.sidebar.number_input("RRR:", 0.1, value=settings.DEFAULT_RRR, step=0.1, format="%.1f", key="rrr_s_man_v5")
+sl_points_single_ui = st.sidebar.number_input("SL (points):", 0.1, value=settings.DEFAULT_STOP_LOSS_POINTS, step=0.1, format="%.2f", key="sl_s_man_v6")
+rrr_single_ui = st.sidebar.number_input("RRR:", 0.1, value=settings.DEFAULT_RRR, step=0.1, format="%.1f", key="rrr_s_man_v6")
 st.sidebar.markdown("**Entry Window (NY Time - Manual Run):**")
-c1,c2=st.sidebar.columns(2); entry_start_hour_single_ui = c1.number_input("Start Hr",0,23,settings.DEFAULT_ENTRY_WINDOW_START_HOUR,1,key="esh_s_man_v5")
-entry_start_minute_single_ui = c2.number_input("Start Min",0,59,settings.DEFAULT_ENTRY_WINDOW_START_MINUTE,15,key="esm_s_man_v5")
-c1,c2=st.sidebar.columns(2); entry_end_hour_single_ui = c1.number_input("End Hr",0,23,settings.DEFAULT_ENTRY_WINDOW_END_HOUR,1,key="eeh_s_man_v5")
-entry_end_minute_single_ui = c2.number_input("End Min",0,59,settings.DEFAULT_ENTRY_WINDOW_END_MINUTE,15,key="eem_s_man_v5", help="Usually 00.")
+c1,c2=st.sidebar.columns(2); entry_start_hour_single_ui = c1.number_input("Start Hr",0,23,settings.DEFAULT_ENTRY_WINDOW_START_HOUR,1,key="esh_s_man_v6")
+entry_start_minute_single_ui = c2.number_input("Start Min",0,59,settings.DEFAULT_ENTRY_WINDOW_START_MINUTE,15,key="esm_s_man_v6")
+c1,c2=st.sidebar.columns(2); entry_end_hour_single_ui = c1.number_input("End Hr",0,23,settings.DEFAULT_ENTRY_WINDOW_END_HOUR,1,key="eeh_s_man_v6")
+entry_end_minute_single_ui = c2.number_input("End Min",0,59,settings.DEFAULT_ENTRY_WINDOW_END_MINUTE,15,key="eem_s_man_v6", help="Usually 00.")
 
-analysis_mode = st.sidebar.radio("Analysis Type:", ("Single Backtest", "Parameter Optimization", "Walk-Forward Optimization"), 0, key="analysis_mode_v5")
+analysis_mode_ui = st.sidebar.radio("Analysis Type:", ("Single Backtest", "Parameter Optimization", "Walk-Forward Optimization"), 0, key="analysis_mode_v6")
 
-# Initialize UI variables for optimizer from settings
 opt_algo_ui = settings.DEFAULT_OPTIMIZATION_ALGORITHM
 sl_min_opt_ui, sl_max_opt_ui, sl_steps_opt_ui = settings.DEFAULT_SL_POINTS_OPTIMIZATION_RANGE.values()
 rrr_min_opt_ui, rrr_max_opt_ui, rrr_steps_opt_ui = settings.DEFAULT_RRR_OPTIMIZATION_RANGE.values()
 esh_min_opt_ui, esh_max_opt_ui, esh_steps_opt_ui = settings.DEFAULT_ENTRY_START_HOUR_OPTIMIZATION_RANGE.values()
-esm_vals_opt_ui = list(settings.DEFAULT_ENTRY_START_MINUTE_OPTIMIZATION_VALUES) # Ensure it's a list for multiselect
+esm_vals_opt_ui = list(settings.DEFAULT_ENTRY_START_MINUTE_OPTIMIZATION_VALUES)
 eeh_min_opt_ui, eeh_max_opt_ui, eeh_steps_opt_ui = settings.DEFAULT_ENTRY_END_HOUR_OPTIMIZATION_RANGE.values()
-# eem_vals_opt_ui = settings.DEFAULT_ENTRY_END_MINUTE_OPTIMIZATION_VALUES # Kept fixed
-
 rand_iters_ui = settings.DEFAULT_RANDOM_SEARCH_ITERATIONS
 opt_metric_ui = settings.DEFAULT_OPTIMIZATION_METRIC
 
-if analysis_mode != "Single Backtest":
+if analysis_mode_ui != "Single Backtest":
     st.sidebar.markdown("##### In-Sample Optimization Settings")
-    opt_algo_ui = st.sidebar.selectbox("Algorithm:", settings.OPTIMIZATION_ALGORITHMS, settings.OPTIMIZATION_ALGORITHMS.index(opt_algo_ui), key="opt_algo_v5")
-    opt_metric_ui = st.sidebar.selectbox("Optimize Metric:", settings.OPTIMIZATION_METRICS, settings.OPTIMIZATION_METRICS.index(opt_metric_ui), key="opt_metric_v5")
-    st.sidebar.markdown("**SL Range:**"); c1,c2,c3=st.sidebar.columns(3); sl_min_opt_ui=c1.number_input("Min",value=sl_min_opt_ui,step=0.1,format="%.1f",key="slmin_o5")
-    sl_max_opt_ui=c2.number_input("Max",value=sl_max_opt_ui,step=0.1,format="%.1f",key="slmax_o5")
-    if opt_algo_ui=="Grid Search": sl_steps_opt_ui=c3.number_input("Steps",2,10,int(sl_steps_opt_ui),1,key="slsteps_o5")
-    st.sidebar.markdown("**RRR Range:**"); c1,c2,c3=st.sidebar.columns(3); rrr_min_opt_ui=c1.number_input("Min",value=rrr_min_opt_ui,step=0.1,format="%.1f",key="rrrmin_o5")
-    rrr_max_opt_ui=c2.number_input("Max",value=rrr_max_opt_ui,step=0.1,format="%.1f",key="rrrmax_o5")
-    if opt_algo_ui=="Grid Search": rrr_steps_opt_ui=c3.number_input("Steps",2,10,int(rrr_steps_opt_ui),1,key="rrrsteps_o5")
-    st.sidebar.markdown("**Entry Start Hr Range:**"); c1,c2,c3=st.sidebar.columns(3); esh_min_opt_ui=c1.number_input("Min Hr",value=esh_min_opt_ui,min_value=0,max_value=23,step=1,key="eshmin_o5")
-    esh_max_opt_ui=c2.number_input("Max Hr",value=esh_max_opt_ui,min_value=0,max_value=23,step=1,key="eshmax_o5")
-    if opt_algo_ui=="Grid Search": esh_steps_opt_ui=c3.number_input("Hr Steps",2,5,int(esh_steps_opt_ui),1,key="eshsteps_o5")
-    esm_vals_opt_ui=st.sidebar.multiselect("Entry Start Min(s):", [0,15,30,45,50], default=esm_vals_opt_ui, key="esmvals_o5")
+    opt_algo_ui = st.sidebar.selectbox("Algorithm:", settings.OPTIMIZATION_ALGORITHMS, settings.OPTIMIZATION_ALGORITHMS.index(opt_algo_ui), key="opt_algo_v6")
+    opt_metric_ui = st.sidebar.selectbox("Optimize Metric:", settings.OPTIMIZATION_METRICS, settings.OPTIMIZATION_METRICS.index(opt_metric_ui), key="opt_metric_v6")
+    st.sidebar.markdown("**SL Range:**"); c1,c2,c3=st.sidebar.columns(3); sl_min_opt_ui=c1.number_input("Min",value=sl_min_opt_ui,step=0.1,format="%.1f",key="slmin_o6")
+    sl_max_opt_ui=c2.number_input("Max",value=sl_max_opt_ui,step=0.1,format="%.1f",key="slmax_o6")
+    if opt_algo_ui=="Grid Search": sl_steps_opt_ui=c3.number_input("Steps",2,10,int(sl_steps_opt_ui),1,key="slsteps_o6")
+    st.sidebar.markdown("**RRR Range:**"); c1,c2,c3=st.sidebar.columns(3); rrr_min_opt_ui=c1.number_input("Min",value=rrr_min_opt_ui,step=0.1,format="%.1f",key="rrrmin_o6")
+    rrr_max_opt_ui=c2.number_input("Max",value=rrr_max_opt_ui,step=0.1,format="%.1f",key="rrrmax_o6")
+    if opt_algo_ui=="Grid Search": rrr_steps_opt_ui=c3.number_input("Steps",2,10,int(rrr_steps_opt_ui),1,key="rrrsteps_o6")
+    st.sidebar.markdown("**Entry Start Hr Range:**"); c1,c2,c3=st.sidebar.columns(3); esh_min_opt_ui=c1.number_input("Min Hr",value=esh_min_opt_ui,min_value=0,max_value=23,step=1,key="eshmin_o6")
+    esh_max_opt_ui=c2.number_input("Max Hr",value=esh_max_opt_ui,min_value=0,max_value=23,step=1,key="eshmax_o6")
+    if opt_algo_ui=="Grid Search": esh_steps_opt_ui=c3.number_input("Hr Steps",2,5,int(esh_steps_opt_ui),1,key="eshsteps_o6")
+    esm_vals_opt_ui=st.sidebar.multiselect("Entry Start Min(s):", [0,15,30,45,50], default=esm_vals_opt_ui, key="esmvals_o6")
     if not esm_vals_opt_ui: esm_vals_opt_ui = [settings.DEFAULT_ENTRY_WINDOW_START_MINUTE]
-    st.sidebar.markdown("**Entry End Hr Range:**"); c1,c2,c3=st.sidebar.columns(3); eeh_min_opt_ui=c1.number_input("Min Hr",value=eeh_min_opt_ui,min_value=0,max_value=23,step=1,key="eehmin_o5")
-    eeh_max_opt_ui=c2.number_input("Max Hr",value=eeh_max_opt_ui,min_value=0,max_value=23,step=1,key="eehmax_o5")
-    if opt_algo_ui=="Grid Search": eeh_steps_opt_ui=c3.number_input("Hr Steps",2,5,int(eeh_steps_opt_ui),1,key="eehsteps_o5")
-    if opt_algo_ui=="Random Search": rand_iters_ui=st.sidebar.number_input("Random Iterations:",10,500,rand_iters_ui,10,key="randiter_o5")
+    st.sidebar.markdown("**Entry End Hr Range:**"); c1,c2,c3=st.sidebar.columns(3); eeh_min_opt_ui=c1.number_input("Min Hr",value=eeh_min_opt_ui,min_value=0,max_value=23,step=1,key="eehmin_o6")
+    eeh_max_opt_ui=c2.number_input("Max Hr",value=eeh_max_opt_ui,min_value=0,max_value=23,step=1,key="eehmax_o6")
+    if opt_algo_ui=="Grid Search": eeh_steps_opt_ui=c3.number_input("Hr Steps",2,5,int(eeh_steps_opt_ui),1,key="eehsteps_o6")
+    if opt_algo_ui=="Random Search": rand_iters_ui=st.sidebar.number_input("Random Iterations:",10,500,rand_iters_ui,10,key="randiter_o6")
     if opt_algo_ui=="Grid Search": st.sidebar.caption(f"Grid Combs: {int(sl_steps_opt_ui*rrr_steps_opt_ui*esh_steps_opt_ui*len(esm_vals_opt_ui)*eeh_steps_opt_ui)}")
     else: st.sidebar.caption(f"Random Iterations: {rand_iters_ui}")
 
 wfo_isd_ui,wfo_oosd_ui,wfo_sd_ui = settings.DEFAULT_WFO_IN_SAMPLE_DAYS, settings.DEFAULT_WFO_OUT_OF_SAMPLE_DAYS, settings.DEFAULT_WFO_STEP_DAYS
-if analysis_mode == "Walk-Forward Optimization":
-    st.sidebar.markdown("##### WFO Settings (Days)"); wfo_isd_ui=st.sidebar.number_input("In-Sample:",30,value=wfo_isd_ui,step=10,key="wfoisd_v5")
-    wfo_oosd_ui=st.sidebar.number_input("Out-of-Sample:",10,value=wfo_oosd_ui,step=5,key="wfoosd_v5")
-    wfo_sd_ui=st.sidebar.number_input("Step:",min_value=wfo_oosd_ui,value=wfo_sd_ui,step=5,key="wfosd_v5")
+if analysis_mode_ui == "Walk-Forward Optimization":
+    st.sidebar.markdown("##### WFO Settings (Days)"); wfo_isd_ui=st.sidebar.number_input("In-Sample:",30,value=wfo_isd_ui,step=10,key="wfoisd_v6")
+    wfo_oosd_ui=st.sidebar.number_input("Out-of-Sample:",10,value=wfo_oosd_ui,step=5,key="wfoosd_v6")
+    wfo_sd_ui=st.sidebar.number_input("Step:",min_value=wfo_oosd_ui,value=wfo_sd_ui,step=5,key="wfosd_v6")
+
 
 st.title(f"🛡️ {settings.APP_TITLE}")
-st.markdown(f"Strategy: Gap Guardian | TF: **{selected_timeframe_display}** ({current_interval}) | Default Entry: {settings.DEFAULT_ENTRY_WINDOW_START_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_START_MINUTE:02d}-{settings.DEFAULT_ENTRY_WINDOW_END_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_END_MINUTE:02d} NYT")
+st.markdown(f"Strategy: Gap Guardian | TF: **{selected_timeframe_display}** ({st.session_state.selected_timeframe_value}) | Default Entry: {settings.DEFAULT_ENTRY_WINDOW_START_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_START_MINUTE:02d}-{settings.DEFAULT_ENTRY_WINDOW_END_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_END_MINUTE:02d} NYT")
 
-if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, key="run_main_v5"):
-    init_session_state(); st.session_state.selected_timeframe = current_interval
-    if start_date >= end_date: st.error(f"Error: Start date ({start_date}) must be before end date ({end_date}).")
+if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, key="run_main_v6"):
+    # Increment run counter (can be useful for forcing re-renders of complex elements if needed)
+    st.session_state.run_analysis_clicked_count += 1
+    
+    # 1. Selectively reset result-specific states
+    logger.info("Run Analysis button clicked. Clearing previous results.")
+    st.session_state.backtest_results = None
+    st.session_state.optimization_results_df = pd.DataFrame()
+    st.session_state.wfo_results = None
+    st.session_state.price_data = pd.DataFrame()
+    st.session_state.signals = pd.DataFrame()
+    st.session_state.best_params_from_opt = None
+    
+    # Crucially, reset tab objects so they are recreated based on new results
+    st.session_state.main_display_tabs_objects = None
+    st.session_state.main_display_tabs_config_tuple = None
+    
+    # 2. Get current UI input values to be used for this run
+    # These are read directly from the widget variables defined above (e.g., start_date_ui, end_date_ui)
+    # The active_current_interval is already set from st.session_state.selected_timeframe_value
+    
+    if start_date_ui >= end_date_ui:
+        st.error(f"Error: Start date ({start_date_ui}) must be before end date ({end_date_ui}).")
     else:
         with st.spinner("Fetching data..."):
-            price_data_df = data_loader.fetch_historical_data(ticker_symbol, start_date, end_date, current_interval)
+            # Use the interval from the session state, which reflects the current UI selection
+            interval_for_run = st.session_state.selected_timeframe_value
+            price_data_df = data_loader.fetch_historical_data(ticker_symbol, start_date_ui, end_date_ui, interval_for_run)
             st.session_state.price_data = price_data_df
-        if price_data_df.empty: st.warning(f"No price data for {selected_ticker_name} ({current_interval}). Cannot proceed.")
+
+        if price_data_df.empty:
+            st.warning(f"No price data for {selected_ticker_name} ({interval_for_run}). Cannot proceed.")
         else:
             manual_entry_start_t = dt_time(entry_start_hour_single_ui, entry_start_minute_single_ui)
             manual_entry_end_t = dt_time(entry_end_hour_single_ui, entry_end_minute_single_ui)
 
-            if analysis_mode == "Single Backtest":
+            if analysis_mode_ui == "Single Backtest":
                 st.subheader("Single Backtest Run")
                 with st.spinner("Running..."):
                     signals = strategy_engine.generate_signals(price_data_df.copy(), sl_points_single_ui, rrr_single_ui, manual_entry_start_t, manual_entry_end_t)
-                    st.session_state.signals = signals
-                    trades, equity, perf = backtester.run_backtest(price_data_df.copy(), signals, initial_capital, risk_per_trade_percent, sl_points_single_ui, current_interval)
-                    st.session_state.backtest_results = {"trades":trades,"equity_curve":equity,"performance":perf,"params":{"SL": sl_points_single_ui,"RRR": rrr_single_ui,"TF":current_interval,"Entry":f"{manual_entry_start_t:%H:%M}-{manual_entry_end_t:%H:%M}","src":"Manual"}}
+                    st.session_state.signals = signals # Store signals for this specific run
+                    trades, equity, perf = backtester.run_backtest(price_data_df.copy(), signals, initial_capital_ui, risk_per_trade_percent_ui, sl_points_single_ui, interval_for_run)
+                    st.session_state.backtest_results = {"trades":trades,"equity_curve":equity,"performance":perf,"params":{"SL": sl_points_single_ui,"RRR": rrr_single_ui,"TF":interval_for_run,"Entry":f"{manual_entry_start_t:%H:%M}-{manual_entry_end_t:%H:%M}","src":"Manual"}}
                     st.success("Single backtest complete!")
             
-            elif analysis_mode in ["Parameter Optimization", "Walk-Forward Optimization"]:
+            elif analysis_mode_ui in ["Parameter Optimization", "Walk-Forward Optimization"]:
                 prog_bar = st.progress(0, text="Initializing optimization...")
                 def opt_cb(p,s): prog_bar.progress(p, text=f"{s}: {int(p*100)}% complete")
                 
-                # This dictionary will contain only the parameters to be optimized and their configurations
-                # For Grid search, values are lists of points. For Random, values are (min,max) tuples or lists of choices.
                 actual_params_to_optimize = {
                     'sl_points': np.linspace(sl_min_opt_ui, sl_max_opt_ui, int(sl_steps_opt_ui)) if opt_algo_ui == "Grid Search" else (sl_min_opt_ui, sl_max_opt_ui),
                     'rrr': np.linspace(rrr_min_opt_ui, rrr_max_opt_ui, int(rrr_steps_opt_ui)) if opt_algo_ui == "Grid Search" else (rrr_min_opt_ui, rrr_max_opt_ui),
                     'entry_start_hour': [int(h) for h in np.linspace(esh_min_opt_ui, esh_max_opt_ui, int(esh_steps_opt_ui))] if opt_algo_ui == "Grid Search" else (esh_min_opt_ui, esh_max_opt_ui),
-                    'entry_start_minute': esm_vals_opt_ui, # Always a list (for Grid or Random choice)
+                    'entry_start_minute': esm_vals_opt_ui,
                     'entry_end_hour': [int(h) for h in np.linspace(eeh_min_opt_ui, eeh_max_opt_ui, int(eeh_steps_opt_ui))] if opt_algo_ui == "Grid Search" else (eeh_min_opt_ui, eeh_max_opt_ui),
-                    'entry_end_minute': settings.DEFAULT_ENTRY_END_MINUTE_OPTIMIZATION_VALUES # Fixed for now
+                    'entry_end_minute': settings.DEFAULT_ENTRY_END_MINUTE_OPTIMIZATION_VALUES
                 }
-                
-                # This dictionary contains control parameters for the optimization process itself
                 optimizer_control_config = {'metric_to_optimize': opt_metric_ui}
-                if opt_algo_ui == "Random Search":
-                    optimizer_control_config['iterations'] = rand_iters_ui
+                if opt_algo_ui == "Random Search": optimizer_control_config['iterations'] = rand_iters_ui
 
-
-                if analysis_mode == "Parameter Optimization":
+                if analysis_mode_ui == "Parameter Optimization":
                     st.subheader(f"Parameter Optimization ({opt_algo_ui} - Full Period)")
                     with st.spinner(f"Running {opt_algo_ui}..."):
-                        if opt_algo_ui == "Grid Search": 
-                            opt_df = optimizer.run_grid_search(price_data_df, initial_capital, risk_per_trade_percent, actual_params_to_optimize, current_interval, lambda p,s: opt_cb(p,s))
-                        else: # Random Search
-                            opt_df = optimizer.run_random_search(price_data_df, initial_capital, risk_per_trade_percent, actual_params_to_optimize, rand_iters_ui, current_interval, lambda p,s: opt_cb(p,s))
+                        if opt_algo_ui == "Grid Search": opt_df = optimizer.run_grid_search(price_data_df, initial_capital_ui, risk_per_trade_percent_ui, actual_params_to_optimize, interval_for_run, lambda p,s: opt_cb(p,s))
+                        else: opt_df = optimizer.run_random_search(price_data_df, initial_capital_ui, risk_per_trade_percent_ui, actual_params_to_optimize, rand_iters_ui, interval_for_run, lambda p,s: opt_cb(p,s))
                         st.session_state.optimization_results_df = opt_df; prog_bar.progress(1.0, "Optimization Complete!")
                         if not opt_df.empty:
+                            # ... (Best param selection and backtest as before)
                             st.success("Full period optimization finished!")
                             valid_opt = opt_df.dropna(subset=[opt_metric_ui])
                             if not valid_opt.empty:
@@ -199,148 +240,157 @@ if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, k
                                 st.info(f"Best for '{opt_metric_ui}': SL={best_r['SL Points']:.2f}, RRR={best_r['RRR']:.1f}, Entry={best_es_t:%H:%M}-{best_ee_t:%H:%M} (Val: {best_r[opt_metric_ui]:.2f})")
                                 with st.spinner("Running backtest with best parameters..."):
                                     signals_b = strategy_engine.generate_signals(price_data_df.copy(),best_r["SL Points"],best_r["RRR"],best_es_t,best_ee_t)
-                                    st.session_state.signals = signals_b
-                                    trades_b,equity_b,perf_b = backtester.run_backtest(price_data_df.copy(),signals_b,initial_capital,risk_per_trade_percent,best_r["SL Points"],current_interval)
-                                    st.session_state.backtest_results = {"trades":trades_b,"equity_curve":equity_b,"performance":perf_b,"params":{"SL":best_r["SL Points"],"RRR":best_r["RRR"],"TF":current_interval,"Entry":f"{best_es_t:%H:%M}-{best_ee_t:%H:%M}","src":f"Opt ({opt_algo_ui})"}}
+                                    st.session_state.signals = signals_b # Store signals for this specific run
+                                    trades_b,equity_b,perf_b = backtester.run_backtest(price_data_df.copy(),signals_b,initial_capital_ui,risk_per_trade_percent_ui,best_r["SL Points"],interval_for_run)
+                                    st.session_state.backtest_results = {"trades":trades_b,"equity_curve":equity_b,"performance":perf_b,"params":{"SL":best_r["SL Points"],"RRR":best_r["RRR"],"TF":interval_for_run,"Entry":f"{best_es_t:%H:%M}-{best_ee_t:%H:%M}","src":f"Opt ({opt_algo_ui})"}}
                             else: st.warning(f"No valid results for '{opt_metric_ui}' in optimization.")
                         else: st.error("Optimization yielded no results.")
 
-                elif analysis_mode == "Walk-Forward Optimization":
+                elif analysis_mode_ui == "Walk-Forward Optimization":
                     st.subheader(f"Walk-Forward Optimization Run ({opt_algo_ui})")
                     wfo_p = {'in_sample_days':wfo_isd_ui,'out_of_sample_days':wfo_oosd_ui,'step_days':wfo_sd_ui}
-                    # Pass the actual_params_to_optimize to WFO, which will then pass it to its internal grid/random search
-                    # Also pass optimizer_control_config which contains 'metric_to_optimize' and 'iterations' for Random Search
                     optimizer_control_config_for_wfo = {**optimizer_control_config, **actual_params_to_optimize}
-
                     with st.spinner(f"Running WFO with {opt_algo_ui}... This will take considerable time."):
                         wfo_log,oos_trades,oos_equity,oos_perf = optimizer.run_walk_forward_optimization(
-                            price_data_df,initial_capital,risk_per_trade_percent,
-                            wfo_p, opt_algo_ui, optimizer_control_config_for_wfo, # Pass the combined config
-                            current_interval,lambda p,s: opt_cb(p,s)
+                            price_data_df,initial_capital_ui,risk_per_trade_percent_ui,
+                            wfo_p, opt_algo_ui, optimizer_control_config_for_wfo,
+                            interval_for_run,lambda p,s: opt_cb(p,s)
                         )
                         st.session_state.wfo_results = {"log":wfo_log,"oos_trades":oos_trades,"oos_equity_curve":oos_equity,"oos_performance":oos_perf}
                         prog_bar.progress(1.0, "WFO Complete!"); st.success("Walk-Forward Optimization finished!")
-                        st.session_state.backtest_results = {"trades":oos_trades,"equity_curve":oos_equity,"performance":oos_perf,"params":{"TF":current_interval,"src":"WFO Aggregated"}}
+                        st.session_state.backtest_results = {"trades":oos_trades,"equity_curve":oos_equity,"performance":oos_perf,"params":{"TF":interval_for_run,"src":"WFO Aggregated"}}
 
 # --- Display Area ---
-# ... (Display logic remains largely the same, ensure keys used for param_info are robust) ...
-# (The display logic from the previous app.py version can be used here, it was already fairly robust)
-# Key is to ensure that the `param_info` string in the Performance Summary title correctly fetches
-# SL, RRR, TF, and Entry details from `st.session_state.backtest_results['params']`
-main_tabs_list = ["📊 Backtest Performance"]
-if not st.session_state.optimization_results_df.empty and analysis_mode == "Parameter Optimization": main_tabs_list.append("⚙️ Optimization Results (Full Period)")
-if st.session_state.wfo_results and analysis_mode == "Walk-Forward Optimization": main_tabs_list.append("🚶 Walk-Forward Analysis")
+# Construct main_tabs_list based on available results for the CURRENT run
+main_tabs_list_current_run = []
+if st.session_state.backtest_results:
+    main_tabs_list_current_run.append("📊 Backtest Performance")
+if not st.session_state.optimization_results_df.empty and analysis_mode_ui == "Parameter Optimization":
+    main_tabs_list_current_run.append("⚙️ Optimization Results (Full Period)")
+if st.session_state.wfo_results and analysis_mode_ui == "Walk-Forward Optimization":
+    main_tabs_list_current_run.append("🚶 Walk-Forward Analysis")
 
-if st.session_state.backtest_results or not st.session_state.optimization_results_df.empty or st.session_state.wfo_results:
-    if 'main_display_tabs' not in st.session_state or st.session_state.get('current_analysis_mode_for_tabs') != analysis_mode or st.session_state.get('current_timeframe_for_tabs') != current_interval:
-        st.session_state.main_display_tabs = st.tabs(main_tabs_list); st.session_state.current_analysis_mode_for_tabs = analysis_mode; st.session_state.current_timeframe_for_tabs = current_interval
-    active_tabs = st.session_state.main_display_tabs
+if main_tabs_list_current_run: # Only create/display tabs if there's something to show for this run
+    # Use a key for the tabs that changes if the fundamental structure changes
+    # This helps Streamlit recreate them properly.
+    tabs_key = f"main_tabs_display_{analysis_mode_ui}_{st.session_state.selected_timeframe_value}_{st.session_state.run_analysis_clicked_count}"
     
-    with active_tabs[0]: # Backtest Performance
-        if st.session_state.backtest_results:
-            results = st.session_state.backtest_results; performance = results["performance"]; trades = results["trades"]; equity_curve = results["equity_curve"]
-            run_params = results.get("params", {}); run_source = run_params.get("src", "N/A"); tf_disp = run_params.get("TF", current_interval)
-            param_info = f" (Source: {run_source} | TF: {tf_disp}"
-            sl_val = run_params.get("SL", run_params.get("SL Points")) 
-            rrr_val = run_params.get("RRR")
-            entry_val = run_params.get("Entry")
-            if sl_val is not None: param_info += f" | SL: {float(sl_val):.2f}" # Ensure float for formatting
-            if rrr_val is not None: param_info += f" | RRR: {float(rrr_val):.1f}" # Ensure float
-            if entry_val is not None: param_info += f" | Entry: {entry_val}"
-            param_info += ")"
-            st.markdown(f"#### Performance Summary{param_info}")
-            POSITIVE_COLOR = settings.POSITIVE_METRIC_COLOR; NEGATIVE_COLOR = settings.NEGATIVE_METRIC_COLOR; NEUTRAL_COLOR = settings.NEUTRAL_METRIC_COLOR
-            def format_metric_display(v, p=2, c=True, pct=False):
-                if pd.isna(v) or v is None: return "N/A"
-                if c: return f"${v:,.{p}f}"
-                if pct: return f"{v:.{p}f}%"
-                return f"{v:,.{p}f}" if isinstance(v, float) else str(v)
-            def display_styled_metric(col, lbl, val, raw, c=True, pct=False, p=2, pf_logic=False, mdd_logic=False):
-                fmt_val = format_metric_display(val, p, c, pct); clr = NEUTRAL_COLOR
-                if not (pd.isna(raw) or raw is None):
-                    if pf_logic:
-                        if raw > 1: clr = POSITIVE_COLOR
-                        elif raw < 1 and raw != 0 : clr = NEGATIVE_COLOR
-                        elif raw == 0 and performance.get('Gross Profit', 0) == 0 and performance.get('Gross Loss', 0) == 0: clr = NEUTRAL_COLOR
-                        elif raw == 0 : clr = NEGATIVE_COLOR
-                    elif mdd_logic:
-                        if raw < 0: clr = NEGATIVE_COLOR
-                        elif raw == 0: clr = NEUTRAL_COLOR
-                    else:
-                        if raw > 0: clr = POSITIVE_COLOR
-                        elif raw < 0: clr = NEGATIVE_COLOR
-                col.markdown(f"""<div class="metric-card"><div class="metric-label">{lbl}</div><div class="metric-value" style="color: {clr};">{fmt_val}</div></div>""", unsafe_allow_html=True)
-            col1,col2,col3=st.columns(3)
-            with col1: display_styled_metric(col1,"Total P&L",performance.get('Total P&L'),performance.get('Total P&L')); display_styled_metric(col1,"Final Capital",performance.get('Final Capital',initial_capital),performance.get('Final Capital',initial_capital),c=True); display_styled_metric(col1,"Max Drawdown",performance.get('Max Drawdown (%)'),performance.get('Max Drawdown (%)'),c=False,pct=True,mdd_logic=True)
-            with col2: display_styled_metric(col2,"Total Trades",int(performance.get('Total Trades',0)),int(performance.get('Total Trades',0)),c=False,pct=False); display_styled_metric(col2,"Win Rate",performance.get('Win Rate',0),performance.get('Win Rate',0),c=False,pct=True); display_styled_metric(col2,"Profit Factor",performance.get('Profit Factor',0),performance.get('Profit Factor',0),c=False,p=2,pf_logic=True)
-            with col3: display_styled_metric(col3,"Avg. Trade P&L",performance.get('Average Trade P&L'),performance.get('Average Trade P&L')); display_styled_metric(col3,"Avg. Winning Trade",performance.get('Average Winning Trade'),performance.get('Average Winning Trade')); display_styled_metric(col3,"Avg. Losing Trade",performance.get('Average Losing Trade'),performance.get('Average Losing Trade'))
-            detail_tabs_list = ["📈 Equity Curve","📊 Trades on Price","📋 Trade Log"]
-            if not st.session_state.signals.empty and analysis_mode != "Walk-Forward Optimization": detail_tabs_list.append("🔍 Generated Signals (Last Run)")
-            detail_tabs_list.append("💾 Raw Price Data (Full Period)")
-            detail_tabs = st.tabs(detail_tabs_list)
-            with detail_tabs[0]:
-                plot_title = "Equity Curve" if analysis_mode != "Walk-Forward Optimization" else "WFO: Aggregated Out-of-Sample Equity"
-                plot_func = plotting.plot_equity_curve if analysis_mode != "Walk-Forward Optimization" else plotting.plot_wfo_equity_curve
-                if not equity_curve.empty: st.plotly_chart(plot_func(equity_curve, title=plot_title), use_container_width=True)
-                else: st.info("Equity curve is not available.")
-            with detail_tabs[1]:
-                if not st.session_state.price_data.empty and not trades.empty : st.plotly_chart(plotting.plot_trades_on_price(st.session_state.price_data, trades, selected_ticker_name), use_container_width=True)
-                else: st.info("Price/trade data not available for plotting.")
-            with detail_tabs[2]:
-                if not trades.empty: st.dataframe(trades.style.format({col: '{:.2f}' for col in trades.select_dtypes(include='float').columns}), height=300, use_container_width=True)
-                else: st.info("No trades were executed.")
-            idx_offset = 0
-            if "🔍 Generated Signals (Last Run)" in detail_tabs_list:
-                with detail_tabs[3]:
-                    if not st.session_state.signals.empty: st.dataframe(st.session_state.signals.style.format({col: '{:.2f}' for col in st.session_state.signals.select_dtypes(include='float').columns}), height=300, use_container_width=True)
-                    else: st.info("No signals generated for the last single/optimization run.")
-                idx_offset = 1
-            with detail_tabs[3+idx_offset]:
-                if not st.session_state.price_data.empty:
-                    st.markdown(f"Full period OHLCV data for **{selected_ticker_name}** ({len(st.session_state.price_data)} rows).")
-                    st.dataframe(st.session_state.price_data.head(), height=300, use_container_width=True)
-                    csv_data = st.session_state.price_data.to_csv(index=True).encode('utf-8'); st.download_button("Download Full Price Data CSV", csv_data, f"{ticker_symbol}_price_data.csv", 'text/csv', key='dl_raw_price_main_v5')
-                else: st.info("Raw price data is not available.")
-        else: st.info("Run an analysis to see performance details.")
+    # We don't need to store tab objects in session state if we recreate them based on current results.
+    # The `st.tabs` function itself returns the active tab.
+    # However, if we want to control which tab is active programmatically, session state for tab objects might be needed.
+    # For now, let Streamlit manage the active tab based on user clicks.
+    
+    active_tabs_objects = st.tabs(main_tabs_list_current_run) #, key=tabs_key) # key on st.tabs can sometimes cause issues with dynamic lists
 
-    opt_tab_idx = main_tabs_list.index("⚙️ Optimization Results (Full Period)") if "⚙️ Optimization Results (Full Period)" in main_tabs_list else -1
-    if opt_tab_idx != -1 and len(active_tabs) > opt_tab_idx:
-        with active_tabs[opt_tab_idx]:
-            opt_df = st.session_state.optimization_results_df
-            if not opt_df.empty:
+    # Tab 1: Backtest Performance
+    if "📊 Backtest Performance" in main_tabs_list_current_run:
+        with active_tabs_objects[main_tabs_list_current_run.index("📊 Backtest Performance")]:
+            if st.session_state.backtest_results:
+                # ... (Existing detailed display logic for backtest performance) ...
+                results = st.session_state.backtest_results; performance = results["performance"]; trades = results["trades"]; equity_curve = results["equity_curve"]
+                run_params = results.get("params", {}); run_source = run_params.get("src", "N/A"); tf_disp = run_params.get("TF", st.session_state.selected_timeframe_value)
+                param_info = f" (Source: {run_source} | TF: {tf_disp}"
+                sl_val = run_params.get("SL", run_params.get("SL Points")) 
+                rrr_val = run_params.get("RRR")
+                entry_val = run_params.get("Entry")
+                if sl_val is not None: param_info += f" | SL: {float(sl_val):.2f}"
+                if rrr_val is not None: param_info += f" | RRR: {float(rrr_val):.1f}"
+                if entry_val is not None: param_info += f" | Entry: {entry_val}"
+                param_info += ")"
+                st.markdown(f"#### Performance Summary{param_info}")
+                POSITIVE_COLOR = settings.POSITIVE_METRIC_COLOR; NEGATIVE_COLOR = settings.NEGATIVE_METRIC_COLOR; NEUTRAL_COLOR = settings.NEUTRAL_METRIC_COLOR
+                def format_metric_display(v, p=2, c=True, pct=False):
+                    if pd.isna(v) or v is None: return "N/A"
+                    if c: return f"${v:,.{p}f}"
+                    if pct: return f"{v:.{p}f}%"
+                    return f"{v:,.{p}f}" if isinstance(v, float) else str(v)
+                def display_styled_metric(col, lbl, val, raw, c=True, pct=False, p=2, pf_logic=False, mdd_logic=False):
+                    fmt_val = format_metric_display(val, p, c, pct); clr = NEUTRAL_COLOR
+                    if not (pd.isna(raw) or raw is None):
+                        if pf_logic:
+                            if raw > 1: clr = POSITIVE_COLOR
+                            elif raw < 1 and raw != 0 : clr = NEGATIVE_COLOR
+                            elif raw == 0 and performance.get('Gross Profit', 0) == 0 and performance.get('Gross Loss', 0) == 0: clr = NEUTRAL_COLOR
+                            elif raw == 0 : clr = NEGATIVE_COLOR
+                        elif mdd_logic:
+                            if raw < 0: clr = NEGATIVE_COLOR
+                            elif raw == 0: clr = NEUTRAL_COLOR
+                        else:
+                            if raw > 0: clr = POSITIVE_COLOR
+                            elif raw < 0: clr = NEGATIVE_COLOR
+                    col.markdown(f"""<div class="metric-card"><div class="metric-label">{lbl}</div><div class="metric-value" style="color: {clr};">{fmt_val}</div></div>""", unsafe_allow_html=True)
+                col1,col2,col3=st.columns(3)
+                with col1: display_styled_metric(col1,"Total P&L",performance.get('Total P&L'),performance.get('Total P&L')); display_styled_metric(col1,"Final Capital",performance.get('Final Capital',initial_capital_ui),performance.get('Final Capital',initial_capital_ui),c=True); display_styled_metric(col1,"Max Drawdown",performance.get('Max Drawdown (%)'),performance.get('Max Drawdown (%)'),c=False,pct=True,mdd_logic=True)
+                with col2: display_styled_metric(col2,"Total Trades",int(performance.get('Total Trades',0)),int(performance.get('Total Trades',0)),c=False,pct=False); display_styled_metric(col2,"Win Rate",performance.get('Win Rate',0),performance.get('Win Rate',0),c=False,pct=True); display_styled_metric(col2,"Profit Factor",performance.get('Profit Factor',0),performance.get('Profit Factor',0),c=False,p=2,pf_logic=True)
+                with col3: display_styled_metric(col3,"Avg. Trade P&L",performance.get('Average Trade P&L'),performance.get('Average Trade P&L')); display_styled_metric(col3,"Avg. Winning Trade",performance.get('Average Winning Trade'),performance.get('Average Winning Trade')); display_styled_metric(col3,"Avg. Losing Trade",performance.get('Average Losing Trade'),performance.get('Average Losing Trade'))
+                detail_tabs_list = ["📈 Equity Curve","📊 Trades on Price","📋 Trade Log"]
+                if not st.session_state.signals.empty and analysis_mode_ui != "Walk-Forward Optimization": detail_tabs_list.append("🔍 Generated Signals (Last Run)")
+                detail_tabs_list.append("💾 Raw Price Data (Full Period)")
+                detail_tabs = st.tabs(detail_tabs_list)
+                with detail_tabs[0]:
+                    plot_title = "Equity Curve" if analysis_mode_ui != "Walk-Forward Optimization" else "WFO: Aggregated Out-of-Sample Equity"
+                    plot_func = plotting.plot_equity_curve if analysis_mode_ui != "Walk-Forward Optimization" else plotting.plot_wfo_equity_curve
+                    if not equity_curve.empty: st.plotly_chart(plot_func(equity_curve, title=plot_title), use_container_width=True)
+                    else: st.info("Equity curve is not available.")
+                with detail_tabs[1]:
+                    if not st.session_state.price_data.empty and not trades.empty : st.plotly_chart(plotting.plot_trades_on_price(st.session_state.price_data, trades, selected_ticker_name), use_container_width=True)
+                    else: st.info("Price/trade data not available for plotting.")
+                with detail_tabs[2]:
+                    if not trades.empty: st.dataframe(trades.style.format({col: '{:.2f}' for col in trades.select_dtypes(include='float').columns}), height=300, use_container_width=True)
+                    else: st.info("No trades were executed.")
+                idx_offset = 0
+                if "🔍 Generated Signals (Last Run)" in detail_tabs_list:
+                    with detail_tabs[3]:
+                        if not st.session_state.signals.empty: st.dataframe(st.session_state.signals.style.format({col: '{:.2f}' for col in st.session_state.signals.select_dtypes(include='float').columns}), height=300, use_container_width=True)
+                        else: st.info("No signals generated for the last single/optimization run.")
+                    idx_offset = 1
+                with detail_tabs[3+idx_offset]:
+                    if not st.session_state.price_data.empty:
+                        st.markdown(f"Full period OHLCV data for **{selected_ticker_name}** ({len(st.session_state.price_data)} rows).")
+                        st.dataframe(st.session_state.price_data.head(), height=300, use_container_width=True)
+                        csv_data = st.session_state.price_data.to_csv(index=True).encode('utf-8'); st.download_button("Download Full Price Data CSV", csv_data, f"{ticker_symbol}_price_data.csv", 'text/csv', key='dl_raw_price_main_v6')
+                    else: st.info("Raw price data is not available.")
+            else: st.info("Run an analysis to see performance details.")
+
+    # Tab 2: Optimization Results
+    if "⚙️ Optimization Results (Full Period)" in main_tabs_list_current_run:
+        with active_tabs_objects[main_tabs_list_current_run.index("⚙️ Optimization Results (Full Period)")]:
+            opt_df_display = st.session_state.optimization_results_df
+            if not opt_df_display.empty:
                 st.markdown("#### Grid/Random Search Results (Full Period)")
-                float_cols_opt = [col for col in opt_df.columns if opt_df[col].dtype == 'float64']
-                st.dataframe(opt_df.style.format({col: '{:.2f}' for col in float_cols_opt}), height=300)
-                csv_opt = opt_df.to_csv(index=False).encode('utf-8'); st.download_button("Download Optimization CSV", csv_opt, f"{ticker_symbol}_opt_results.csv", 'text/csv', key='dl_opt_csv_main_v5')
+                float_cols_opt_disp = [col for col in opt_df_display.columns if opt_df_display[col].dtype == 'float64']
+                st.dataframe(opt_df_display.style.format({col: '{:.2f}' for col in float_cols_opt_disp}), height=300)
+                csv_opt_disp = opt_df_display.to_csv(index=False).encode('utf-8'); st.download_button("Download Optimization CSV", csv_opt_disp, f"{ticker_symbol}_opt_results.csv", 'text/csv', key='dl_opt_csv_main_v6')
                 st.markdown("#### Optimization Heatmap (SL vs RRR - Full Period)")
-                opt_metric_hm = opt_metric_ui if analysis_mode == "Parameter Optimization" else settings.DEFAULT_OPTIMIZATION_METRIC
-                if opt_algo_ui == "Grid Search" and 'SL Points' in opt_df.columns and 'RRR' in opt_df.columns:
-                    heatmap_fig = plotting.plot_optimization_heatmap(opt_df, 'SL Points', 'RRR', opt_metric_hm)
-                    st.plotly_chart(heatmap_fig, use_container_width=True)
+                opt_metric_hm_disp = opt_metric_ui if analysis_mode_ui == "Parameter Optimization" else settings.DEFAULT_OPTIMIZATION_METRIC
+                if opt_algo_ui == "Grid Search" and 'SL Points' in opt_df_display.columns and 'RRR' in opt_df_display.columns:
+                    heatmap_fig_disp = plotting.plot_optimization_heatmap(opt_df_display, 'SL Points', 'RRR', opt_metric_hm_disp)
+                    st.plotly_chart(heatmap_fig_disp, use_container_width=True)
                 else: st.info("Heatmap for SL vs RRR is generated for Grid Search. For other parameters or Random Search, review the table.")
             else: st.info("No full-period optimization results. Run 'Parameter Optimization' mode.")
 
-    wfo_tab_idx = main_tabs_list.index("🚶 Walk-Forward Analysis") if "🚶 Walk-Forward Analysis" in main_tabs_list else -1
-    if wfo_tab_idx != -1 and len(active_tabs) > wfo_tab_idx:
-        with active_tabs[wfo_tab_idx]:
+    # Tab 3: Walk-Forward Analysis
+    if "🚶 Walk-Forward Analysis" in main_tabs_list_current_run:
+        with active_tabs_objects[main_tabs_list_current_run.index("🚶 Walk-Forward Analysis")]:
             if st.session_state.wfo_results:
-                wfo_res = st.session_state.wfo_results
-                st.markdown("#### Walk-Forward Optimization Log"); st.dataframe(wfo_res["log"].style.format({col: '{:.2f}' for col in wfo_res["log"].select_dtypes(include='float').columns if col in wfo_res["log"]}), height=300)
-                csv_wfo_log = wfo_res["log"].to_csv(index=False).encode('utf-8'); st.download_button("Download WFO Log CSV", csv_wfo_log, f"{ticker_symbol}_wfo_log.csv", 'text/csv', key='dl_wfo_log_main_v5')
+                wfo_res_disp = st.session_state.wfo_results
+                st.markdown("#### Walk-Forward Optimization Log"); st.dataframe(wfo_res_disp["log"].style.format({col: '{:.2f}' for col in wfo_res_disp["log"].select_dtypes(include='float').columns if col in wfo_res_disp["log"]}), height=300)
+                csv_wfo_log_disp = wfo_res_disp["log"].to_csv(index=False).encode('utf-8'); st.download_button("Download WFO Log CSV", csv_wfo_log_disp, f"{ticker_symbol}_wfo_log.csv", 'text/csv', key='dl_wfo_log_main_v6')
                 st.markdown("#### Aggregated Out-of-Sample Trades")
-                if not wfo_res["oos_trades"].empty:
-                    st.dataframe(wfo_res["oos_trades"].style.format({col: '{:.2f}' for col in wfo_res["oos_trades"].select_dtypes(include='float').columns}), height=300)
-                    csv_wfo_trades = wfo_res["oos_trades"].to_csv(index=False).encode('utf-8'); st.download_button("Download WFO OOS Trades CSV", csv_wfo_trades, f"{ticker_symbol}_wfo_oos_trades.csv", 'text/csv', key='dl_wfo_trades_main_v5')
+                if not wfo_res_disp["oos_trades"].empty:
+                    st.dataframe(wfo_res_disp["oos_trades"].style.format({col: '{:.2f}' for col in wfo_res_disp["oos_trades"].select_dtypes(include='float').columns}), height=300)
+                    csv_wfo_trades_disp = wfo_res_disp["oos_trades"].to_csv(index=False).encode('utf-8'); st.download_button("Download WFO OOS Trades CSV", csv_wfo_trades_disp, f"{ticker_symbol}_wfo_oos_trades.csv", 'text/csv', key='dl_wfo_trades_main_v6')
                 else: st.info("No out-of-sample trades generated during WFO.")
             else: st.info("No WFO results. Run 'Walk-Forward Optimization' mode.")
 
-elif st.sidebar.button("Clear Results", use_container_width=True, key="clear_button_main_page_tf_v5"):
-    init_session_state(); st.info("Results cleared."); st.experimental_rerun()
-else:
+elif st.session_state.run_analysis_clicked_count > 0 : # If button was clicked but no tabs to show
+    st.info("Analysis initiated. If results are expected but not shown, check for errors or empty data conditions above.")
+
+else: # Initial state, no analysis run yet
     if not any([st.session_state.backtest_results, not st.session_state.optimization_results_df.empty, st.session_state.wfo_results]):
-        st.info("Configure parameters and click 'Run Analysis'.")
+        st.info("Configure parameters in the sidebar and click 'Run Analysis'.")
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"App Version: 0.4.1 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+st.sidebar.info(f"App Version: 0.4.2 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 st.sidebar.caption("Disclaimer: Financial modeling tool. Past performance and optimization results are not indicative of future results and can be overfit.")
 
