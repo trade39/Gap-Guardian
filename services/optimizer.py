@@ -4,6 +4,7 @@ Performs parameter optimization for trading strategies using Grid Search, Random
 and Walk-Forward Optimization (WFO).
 Corrected Max Drawdown calculation and WFO equity curve generation.
 Fixed DatetimeIndex.union_many error.
+Corrected resample call in _calculate_daily_returns.
 """
 import pandas as pd
 import numpy as np
@@ -20,13 +21,24 @@ logger = get_logger(__name__)
 def _calculate_daily_returns(equity_series: pd.Series) -> pd.Series:
     if equity_series.empty or equity_series.nunique() <= 1:
         return pd.Series(dtype=float)
-    daily_equity = equity_series.resample('D').last()
+    # Resample to daily, taking the last value, then ffill for non-trading days within the series span
+    # Explicitly use rule='D' for resample
+    daily_equity = equity_series.resample(rule='D').last()
     if not daily_equity.empty:
         first_valid_idx = daily_equity.first_valid_index()
         last_valid_idx = daily_equity.last_valid_index()
-        if first_valid_idx is not None and last_valid_idx is not None:
+        if first_valid_idx is not None and last_valid_idx is not None and first_valid_idx <= last_valid_idx: # Ensure valid range
             daily_equity = daily_equity.loc[first_valid_idx:last_valid_idx].ffill()
+        elif first_valid_idx is not None: # Only one valid point
+             daily_equity = daily_equity.loc[[first_valid_idx]]
+        else: # All NaN after resample
+            daily_equity = pd.Series(dtype=float)
+
+
     daily_returns = daily_equity.pct_change().fillna(0)
+    if daily_returns.empty and not daily_equity.empty and daily_equity.nunique() > 0 : # Handle case where only one equity point remains after resample
+        return pd.Series([0.0], index=[daily_equity.index[0]])
+
     return daily_returns
 
 def calculate_sharpe_ratio(returns_series, risk_free_rate=settings.RISK_FREE_RATE, trading_days_per_year=settings.TRADING_DAYS_PER_YEAR):
@@ -206,98 +218,60 @@ def run_walk_forward_optimization(
 
     wfo_log_df = pd.DataFrame(wfo_log)
     final_oos_trades_df = pd.concat(all_oos_trades_list, ignore_index=True) if all_oos_trades_list else pd.DataFrame()
-    
     chained_oos_equity_points = {}
     current_chained_capital = initial_capital
     first_oos_period_start_date = min((f['OutOfSampleStart'] for f in wfo_log if f.get('OutOfSampleStart')), default=None)
-    first_oos_timestamp = full_price_data.index.min() # Default if no OOS or no price data
+    first_oos_timestamp = full_price_data.index.min()
     if first_oos_period_start_date and not full_price_data.empty:
         candidate_ts = full_price_data[full_price_data.index.date >= first_oos_period_start_date].index.min()
         if not pd.isna(candidate_ts): first_oos_timestamp = candidate_ts
     elif not full_price_data.empty: first_oos_timestamp = full_price_data.index.min()
     else: first_oos_timestamp = pd.Timestamp.now(tz=settings.NY_TIMEZONE_STR) - timedelta(days=1)
     if pd.isna(first_oos_timestamp): first_oos_timestamp = pd.Timestamp.now(tz=settings.NY_TIMEZONE_STR) - timedelta(days=1)
-    
     chained_oos_equity_points[first_oos_timestamp - pd.Timedelta(microseconds=1)] = initial_capital
-
     if not final_oos_trades_df.empty:
         final_oos_trades_df_sorted_by_exit = final_oos_trades_df.sort_values(by='ExitTime').reset_index(drop=True)
         for _, trade in final_oos_trades_df_sorted_by_exit.iterrows():
-            current_chained_capital += trade['P&L']
-            chained_oos_equity_points[trade['ExitTime']] = current_chained_capital
-    
+            current_chained_capital += trade['P&L']; chained_oos_equity_points[trade['ExitTime']] = current_chained_capital
     raw_chained_equity_series = pd.Series(dtype=float)
-    if chained_oos_equity_points:
-        raw_chained_equity_series = pd.Series(chained_oos_equity_points).sort_index()
-    elif not full_price_data.empty: # No trades but data exists
-        raw_chained_equity_series = pd.Series([initial_capital], index=[full_price_data.index.min()])
-    else: # No trades, no data
-        raw_chained_equity_series = pd.Series([initial_capital], index=[first_oos_timestamp])
-
-
-    final_plottable_equity = raw_chained_equity_series # This is the point-in-time equity
+    if chained_oos_equity_points: raw_chained_equity_series = pd.Series(chained_oos_equity_points).sort_index()
+    elif not full_price_data.empty: raw_chained_equity_series = pd.Series([initial_capital], index=[full_price_data.index.min()])
+    else: raw_chained_equity_series = pd.Series([initial_capital], index=[first_oos_timestamp])
+    final_plottable_equity = raw_chained_equity_series
     if not raw_chained_equity_series.empty and not full_price_data.empty and wfo_log:
         all_oos_fold_timestamps = pd.DatetimeIndex([])
         for fold_info in wfo_log:
-            oos_s_fold = fold_info.get('OutOfSampleStart')
-            oos_e_fold = fold_info.get('OutOfSampleEnd')
+            oos_s_fold, oos_e_fold = fold_info.get('OutOfSampleStart'), fold_info.get('OutOfSampleEnd')
             if oos_s_fold and oos_e_fold:
-                fold_ts = full_price_data[
-                    (full_price_data.index.date >= oos_s_fold) &
-                    (full_price_data.index.date <= oos_e_fold)
-                ].index
-                if not fold_ts.empty:
-                     all_oos_fold_timestamps = all_oos_fold_timestamps.union(fold_ts)
-        
+                fold_ts = full_price_data[(full_price_data.index.date >= oos_s_fold) & (full_price_data.index.date <= oos_e_fold)].index
+                if not fold_ts.empty: all_oos_fold_timestamps = all_oos_fold_timestamps.union(fold_ts)
         if not all_oos_fold_timestamps.empty:
-            # Ensure the raw series covers the start of the first OOS timestamp
             if raw_chained_equity_series.index.min() > all_oos_fold_timestamps.min():
                  start_equity_point = pd.Series([initial_capital], index=[all_oos_fold_timestamps.min() - pd.Timedelta(microseconds=1)])
                  raw_chained_equity_series = pd.concat([start_equity_point, raw_chained_equity_series]).sort_index()
-
-            final_plottable_equity = raw_chained_equity_series.reindex(
-                raw_chained_equity_series.index.union(all_oos_fold_timestamps)
-            ).ffill()
-            # Filter to the actual range of OOS timestamps
+            final_plottable_equity = raw_chained_equity_series.reindex(raw_chained_equity_series.index.union(all_oos_fold_timestamps)).ffill()
             final_plottable_equity = final_plottable_equity.loc[all_oos_fold_timestamps.min():all_oos_fold_timestamps.max()]
-            # Ensure first point is initial_capital if it got lost in reindexing
             if not final_plottable_equity.empty and pd.isna(final_plottable_equity.iloc[0]):
-                final_plottable_equity.iloc[0] = initial_capital
-                final_plottable_equity = final_plottable_equity.ffill()
-
-    aggregated_oos_perf = {
-        'Total Trades': 0, 'Total P&L': np.nan, 'Final Capital': initial_capital,
-        'Sharpe Ratio (Annualized)': np.nan, 'Sortino Ratio (Annualized)': np.nan,
-        'Max Drawdown (%)': 0.0, 'Win Rate': 0.0, 'Profit Factor': 0.0,
-        'Average Trade P&L': np.nan, 'Average Winning Trade': np.nan, 'Average Losing Trade': np.nan
-    }
+                final_plottable_equity.iloc[0] = initial_capital; final_plottable_equity = final_plottable_equity.ffill()
+    aggregated_oos_perf = {'Total Trades': 0, 'Total P&L': np.nan, 'Final Capital': initial_capital, 'Sharpe Ratio (Annualized)': np.nan, 'Sortino Ratio (Annualized)': np.nan, 'Max Drawdown (%)': 0.0, 'Win Rate': 0.0, 'Profit Factor': 0.0, 'Average Trade P&L': np.nan, 'Average Winning Trade': np.nan, 'Average Losing Trade': np.nan}
     if not final_oos_trades_df.empty:
         aggregated_oos_perf['Total Trades'] = len(final_oos_trades_df)
         aggregated_oos_perf['Total P&L'] = final_oos_trades_df['P&L'].sum()
-        
         if not final_plottable_equity.empty and final_plottable_equity.notna().any():
             aggregated_oos_perf['Final Capital'] = final_plottable_equity.iloc[-1]
-            # MDD Calculation from the final_plottable_equity (point-in-time)
-            cumulative_max_raw = final_plottable_equity.cummax()
-            drawdown_raw = (final_plottable_equity - cumulative_max_raw) / cumulative_max_raw
+            cumulative_max_raw = final_plottable_equity.cummax(); drawdown_raw = (final_plottable_equity - cumulative_max_raw) / cumulative_max_raw
             drawdown_raw.replace([np.inf, -np.inf], np.nan, inplace=True) 
             aggregated_oos_perf['Max Drawdown (%)'] = drawdown_raw.min() * 100 if drawdown_raw.notna().any() and not drawdown_raw.empty else 0.0
-            
-            daily_oos_returns_chained = _calculate_daily_returns(final_plottable_equity) # Use final_plottable_equity for daily returns
+            daily_oos_returns_chained = _calculate_daily_returns(final_plottable_equity)
             aggregated_oos_perf['Sharpe Ratio (Annualized)'] = calculate_sharpe_ratio(daily_oos_returns_chained)
             aggregated_oos_perf['Sortino Ratio (Annualized)'] = calculate_sortino_ratio(daily_oos_returns_chained)
-        else: 
-            aggregated_oos_perf['Final Capital'] = initial_capital + aggregated_oos_perf['Total P&L']
-
-        num_winning = len(final_oos_trades_df[final_oos_trades_df['P&L'] > 0])
-        num_losing = len(final_oos_trades_df[final_oos_trades_df['P&L'] < 0])
+        else: aggregated_oos_perf['Final Capital'] = initial_capital + aggregated_oos_perf['Total P&L']
+        num_winning = len(final_oos_trades_df[final_oos_trades_df['P&L'] > 0]); num_losing = len(final_oos_trades_df[final_oos_trades_df['P&L'] < 0])
         aggregated_oos_perf['Win Rate'] = (num_winning / aggregated_oos_perf['Total Trades'] * 100) if aggregated_oos_perf['Total Trades'] > 0 else 0.0
         if aggregated_oos_perf['Total Trades'] > 0: aggregated_oos_perf['Average Trade P&L'] = final_oos_trades_df['P&L'].mean()
         if num_winning > 0: aggregated_oos_perf['Average Winning Trade'] = final_oos_trades_df[final_oos_trades_df['P&L'] > 0]['P&L'].mean()
         if num_losing > 0: aggregated_oos_perf['Average Losing Trade'] = final_oos_trades_df[final_oos_trades_df['P&L'] < 0]['P&L'].mean()
         gp = final_oos_trades_df[final_oos_trades_df['P&L'] > 0]['P&L'].sum(); gl = final_oos_trades_df[final_oos_trades_df['P&L'] < 0]['P&L'].sum()
         aggregated_oos_perf['Profit Factor'] = abs(gp / gl) if gl != 0 else np.inf if gp > 0 else 0.0
-        
     logger.info(f"WFO complete. Processed {fold_num} folds.")
     return wfo_log_df, final_oos_trades_df, final_plottable_equity, aggregated_oos_perf
-
