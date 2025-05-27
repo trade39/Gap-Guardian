@@ -5,6 +5,7 @@ yfinance>=0.2.30,<0.3.0
 plotly>=5.10.0,<6.0.0
 pytz>=2023.3
 python-dotenv>=1.0.0
+tqdm>=4.60.0,<5.0.0 
 # Lock specific versions after testing
 # Example:
 # streamlit==1.33.0
