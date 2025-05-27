@@ -7,8 +7,22 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 from config.settings import PLOTLY_TEMPLATE
+from utils.logger import get_logger # Added logger import
+
+# Instantiate logger
+logger = get_logger(__name__)
 
 def plot_equity_curve(equity_curve: pd.Series, title: str = "Equity Curve") -> go.Figure:
+    """
+    Plots the equity curve.
+
+    Args:
+        equity_curve (pd.Series): Series containing equity values over time.
+        title (str): Title of the plot.
+
+    Returns:
+        go.Figure: Plotly figure object.
+    """
     fig = go.Figure()
     if not equity_curve.empty:
         fig.add_trace(go.Scatter(x=equity_curve.index, y=equity_curve, mode='lines', name='Equity'))
@@ -19,7 +33,16 @@ def plot_wfo_equity_curve(
     chained_oos_equity: pd.Series,
     title: str = "Walk-Forward Out-of-Sample Equity Curve"
 ) -> go.Figure:
-    """Plots the chained out-of-sample equity curve from WFO."""
+    """
+    Plots the chained out-of-sample equity curve from Walk-Forward Optimization.
+
+    Args:
+        chained_oos_equity (pd.Series): Series containing chained OOS equity values.
+        title (str): Title of the plot.
+
+    Returns:
+        go.Figure: Plotly figure object.
+    """
     fig = go.Figure()
     if not chained_oos_equity.empty:
         fig.add_trace(go.Scatter(x=chained_oos_equity.index, y=chained_oos_equity, mode='lines', name='WFO OOS Equity'))
@@ -39,7 +62,17 @@ def plot_wfo_equity_curve(
 
 
 def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol: str) -> go.Figure:
-    # ... (existing code for plot_trades_on_price, no changes needed here for WFO directly) ...
+    """
+    Plots trades (entry and exit points) overlaid on the price candlestick chart.
+
+    Args:
+        price_data (pd.DataFrame): OHLC price data.
+        trades (pd.DataFrame): DataFrame of executed trades.
+        symbol (str): The financial symbol being plotted.
+
+    Returns:
+        go.Figure: Plotly figure object.
+    """
     fig = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.1)
     if not price_data.empty:
         fig.add_trace(go.Candlestick(x=price_data.index,
@@ -64,7 +97,7 @@ def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol:
                                  mode='markers', name='Exit',
                                  marker=dict(color='blue', size=8, symbol='square')), row=1, col=1)
         
-        # SL/TP lines can make the plot very busy with many WFO trades, consider making this optional
+        # Optional: SL/TP lines (can be noisy)
         # for _, trade in trades.iterrows():
         #     fig.add_shape(type="line", x0=trade['EntryTime'], y0=trade['SL'], x1=trade['ExitTime'], y1=trade['SL'], line=dict(color="rgba(255,0,0,0.3)", width=1, dash="dash"))
         #     fig.add_shape(type="line", x0=trade['EntryTime'], y0=trade['TP'], x1=trade['ExitTime'], y1=trade['TP'], line=dict(color="rgba(0,255,0,0.3)", width=1, dash="dash"))
@@ -77,25 +110,49 @@ def plot_optimization_heatmap(
     optimization_results_df: pd.DataFrame,
     param1_name: str, param2_name: str, metric_name: str
 ) -> go.Figure:
-    # ... (existing code for plot_optimization_heatmap, minor robustness for empty data) ...
+    """
+    Generates a heatmap for visualizing optimization results between two parameters.
+
+    Args:
+        optimization_results_df (pd.DataFrame): DataFrame of optimization results.
+        param1_name (str): Name of the first parameter (columns).
+        param2_name (str): Name of the second parameter (rows).
+        metric_name (str): Name of the metric to plot as heatmap values.
+
+    Returns:
+        go.Figure: Plotly figure object.
+    """
     if optimization_results_df.empty or not all(p in optimization_results_df.columns for p in [param1_name, param2_name, metric_name]):
+        logger.warning(f"Insufficient data or missing columns for heatmap. Params: {param1_name}, {param2_name}. Metric: {metric_name}. Columns available: {optimization_results_df.columns.tolist()}")
         fig = go.Figure()
         fig.update_layout(title=f"Insufficient Data for Heatmap ({metric_name})", height=400, template=PLOTLY_TEMPLATE)
-        fig.add_annotation(text="Not enough data or missing columns for heatmap.", showarrow=False)
+        fig.add_annotation(text="Not enough data or missing columns for heatmap generation.", showarrow=False)
         return fig
     try:
+        # Pivot the data to create a matrix for the heatmap
         heatmap_data = optimization_results_df.pivot(index=param2_name, columns=param1_name, values=metric_name)
-        heatmap_data = heatmap_data.sort_index(ascending=False)
-        fig = px.imshow(heatmap_data, labels=dict(x=param1_name, y=param2_name, color=metric_name),
-                        x=heatmap_data.columns, y=heatmap_data.index, aspect="auto",
+        # Sort index (param2_name, typically RRR) in descending order for conventional heatmap display
+        heatmap_data = heatmap_data.sort_index(ascending=False) 
+        
+        fig = px.imshow(heatmap_data, 
+                        labels=dict(x=param1_name, y=param2_name, color=metric_name),
+                        x=heatmap_data.columns, 
+                        y=heatmap_data.index, 
+                        aspect="auto",
                         color_continuous_scale=px.colors.diverging.RdYlGn if "P&L" in metric_name or "Ratio" in metric_name or "Factor" in metric_name else px.colors.sequential.Viridis,
-                        origin='lower')
+                        origin='lower' # Ensures y-axis starts from bottom with sorted data
+                       )
+        
         fig.update_layout(title=f'Optimization Heatmap: {metric_name} vs. {param1_name} & {param2_name}',
                           xaxis_title=param1_name, yaxis_title=param2_name, height=600, template=PLOTLY_TEMPLATE)
-        fig.update_xaxes(type='category', tickvals=heatmap_data.columns, ticktext=[f"{x:.2f}" for x in heatmap_data.columns])
-        fig.update_yaxes(type='category', tickvals=heatmap_data.index, ticktext=[f"{y:.1f}" for y in heatmap_data.index])
+        
+        # Ensure x and y axes ticks are formatted correctly, especially for float values
+        fig.update_xaxes(type='category', tickvals=heatmap_data.columns, ticktext=[f"{x:.2f}" if isinstance(x, float) else str(x) for x in heatmap_data.columns])
+        fig.update_yaxes(type='category', tickvals=heatmap_data.index, ticktext=[f"{y:.1f}" if isinstance(y, float) else str(y) for y in heatmap_data.index])
+
     except Exception as e:
+        logger.error(f"Error creating heatmap for metric '{metric_name}' with params '{param1_name}', '{param2_name}': {e}", exc_info=True)
         fig = go.Figure()
-        fig.update_layout(title=f"Error Generating Heatmap: {e}", height=400, template=PLOTLY_TEMPLATE)
-        logger.error(f"Error creating heatmap: {e}", exc_info=True)
+        fig.update_layout(title=f"Error Generating Heatmap: Review Logs", height=400, template=PLOTLY_TEMPLATE) # User-friendly error
+        fig.add_annotation(text=f"Could not generate heatmap. Details: {str(e)}", showarrow=False)
     return fig
