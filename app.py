@@ -7,12 +7,32 @@ Allows selection of different trading strategies and displays their logic.
 import sys
 import os
 
-# Add the project root directory to sys.path
-# This ensures that top-level packages like 'services', 'utils', 'config' are discoverable
-# when modules from sub-packages (like services.strategies) try to import them.
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+# --- sys.path modification and diagnostics ---
+# Assuming app.py is in the project root directory (e.g., 'gap-guardian')
+# which contains 'services', 'utils', 'config' as subdirectories.
+APP_FILE_PATH = os.path.abspath(__file__)
+PROJECT_ROOT = os.path.dirname(APP_FILE_PATH)
+
+print(f"--- [DEBUG app.py] ---")
+print(f"APP_FILE_PATH: {APP_FILE_PATH}")
+print(f"Calculated PROJECT_ROOT: {PROJECT_ROOT}")
+print(f"Original sys.path: {sys.path}")
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+    print(f"PROJECT_ROOT ('{PROJECT_ROOT}') was not in sys.path. Added it to the beginning.")
+else:
+    # If already in sys.path, ensure it's at the beginning for priority
+    if sys.path[0] != PROJECT_ROOT:
+        sys.path.remove(PROJECT_ROOT)
+        sys.path.insert(0, PROJECT_ROOT)
+        print(f"PROJECT_ROOT ('{PROJECT_ROOT}') was in sys.path but not at index 0. Moved it to the beginning.")
+    else:
+        print(f"PROJECT_ROOT ('{PROJECT_ROOT}') is already the first item in sys.path.")
+
+print(f"Final sys.path for app.py: {sys.path}")
+print(f"--- [END DEBUG app.py] ---")
+# --- end of sys.path modification and diagnostics ---
 
 # Now, proceed with other imports
 import streamlit as st
@@ -20,9 +40,11 @@ import pandas as pd
 import numpy as np
 from datetime import date, timedelta, datetime, time as dt_time
 
-from config import settings
-from services import data_loader, strategy_engine, backtester, optimizer # This is line 13 in original traceback
-from utils import plotting, logger as app_logger
+# These imports depend on the sys.path being correctly set up.
+from config import settings # This should now find config/settings.py
+from utils import plotting, logger as app_logger # This should now find utils/
+# The following import is where the error was occurring
+from services import data_loader, strategy_engine, backtester, optimizer # This is line 24 in your latest traceback
 
 logger = app_logger.get_logger(__name__)
 
@@ -31,15 +53,22 @@ st.set_page_config(page_title=settings.APP_TITLE, page_icon="🛡️📈", layou
 def load_custom_css(css_file_path):
     """Loads custom CSS from a file and applies it."""
     try:
-        with open(css_file_path) as f:
+        # Construct path relative to this app.py file if style.css is in 'static' subdir
+        # For Streamlit sharing, paths are usually relative to the main app script.
+        full_css_path = os.path.join(os.path.dirname(__file__), css_file_path)
+        if not os.path.exists(full_css_path): # Fallback for different execution contexts
+            full_css_path = css_file_path
+
+        with open(full_css_path) as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+            logger.info(f"Successfully loaded CSS from: {full_css_path}")
     except FileNotFoundError:
+        logger.warning(f"CSS file not found. Tried path: {full_css_path} and original path: {css_file_path}")
         st.warning(f"CSS file not found at path: {css_file_path}")
     except Exception as e:
+        logger.warning(f"Error loading CSS file '{css_file_path}': {e}")
         st.warning(f"Error loading CSS file '{css_file_path}': {e}")
 
-# Attempt to load CSS. If app.py is in project root, 'static/style.css' should be correct.
-# If deploying, ensure this path is relative to where app.py is.
 load_custom_css("static/style.css")
 
 
@@ -815,5 +844,6 @@ else: # Initial state before any analysis run
 
 # --- Footer and Disclaimer ---
 st.sidebar.markdown("---")
-st.sidebar.info(f"App Version: 0.6.1 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}") # Version increment
+st.sidebar.info(f"App Version: 0.6.2 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}") # Version increment
 st.sidebar.caption("Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management.")
+
