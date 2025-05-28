@@ -2,22 +2,55 @@
 """
 Dispatcher for generating trading signals based on the selected strategy.
 Imports and calls strategy-specific signal generation functions.
-Uses absolute import for the 'strategies' submodule.
 """
+import sys
+import os
 import pandas as pd
 from datetime import time as dt_time
 
-from config import settings # For NY_TIMEZONE and potentially other shared settings
-from utils.logger import get_logger
+# --- sys.path diagnostics for strategy_engine.py ---
+STRATEGY_ENGINE_FILE_PATH = os.path.abspath(__file__)
+# Assuming strategy_engine.py is in 'project_root/services/'
+# So, project_root is one level up from the 'services' directory.
+# Or, if app.py already set sys.path correctly, this module should just use it.
+print(f"--- [DEBUG strategy_engine.py] ---")
+print(f"STRATEGY_ENGINE_FILE_PATH: {STRATEGY_ENGINE_FILE_PATH}")
+print(f"sys.path as seen by strategy_engine.py (before any local modification): {sys.path}")
+# We expect the project root (e.g., '/mount/src/gap-guardian') to be in sys.path, added by app.py.
+# Let's check if 'utils' and 'config' are accessible from the current sys.path
+project_root_candidate = None
+for path_entry in sys.path:
+    if os.path.isdir(os.path.join(path_entry, 'utils')) and \
+       os.path.isdir(os.path.join(path_entry, 'config')) and \
+       os.path.isdir(os.path.join(path_entry, 'services')):
+        project_root_candidate = path_entry
+        break
+print(f"Attempted to find project root in sys.path: {project_root_candidate if project_root_candidate else 'Not found based on subdirs.'}")
+print(f"--- [END DEBUG strategy_engine.py] ---")
+# --- end of sys.path diagnostics ---
 
-# Import strategy-specific generation functions using an absolute path
-# from the project root, assuming 'services' is a top-level package directory.
-# THIS IS THE CRITICAL LINE THAT NEEDS TO BE ABSOLUTE:
-from services.strategies import (
-    generate_gap_guardian_signals,
-    generate_unicorn_signals,
-    generate_silver_bullet_signals
-)
+
+# These imports depend on the project root being in sys.path
+try:
+    from config import settings # For NY_TIMEZONE and potentially other shared settings
+    from utils.logger import get_logger
+except ImportError as e:
+    print(f"CRITICAL ERROR in strategy_engine.py: Could not import 'config' or 'utils'. Sys.path: {sys.path}. Error: {e}")
+    # If these fail, the module cannot proceed. Raising an error here might give a clearer traceback.
+    raise ImportError(f"strategy_engine.py: Failed to import 'config' or 'utils'. Ensure project root is in sys.path. Original error: {e}") from e
+
+# THIS IS THE CRITICAL IMPORT (line 16 in your traceback)
+# It relies on 'services.strategies' being a discoverable package,
+# and its __init__.py being able to successfully import from individual strategy files.
+try:
+    from services.strategies import (
+        generate_gap_guardian_signals,
+        generate_unicorn_signals,
+        generate_silver_bullet_signals
+    )
+except ImportError as e:
+    print(f"ERROR in strategy_engine.py: Failed during 'from services.strategies import ...'. This often means a strategy file (e.g., gap_guardian.py) within 'services/strategies/' failed to load its own dependencies (like utils/config). Sys.path: {sys.path}. Error: {e}")
+    raise # Re-raise the error to see the original traceback clearly.
 
 logger = get_logger(__name__)
 
@@ -50,12 +83,11 @@ def generate_signals(
 
     # Ensure data is in NY timezone, as most strategies are time-sensitive to this market.
     if data.index.tz is None:
-        logger.warning(f"Strategy Engine: Data timezone is naive for '{strategy_name}', localizing to NY timezone.")
+        logger.warning(f"Strategy Engine: Data timezone is naive for '{strategy_name}', localizing to NY timezone ({settings.NY_TIMEZONE_STR}).")
         try:
-            data = data.tz_localize(settings.NY_TIMEZONE_STR)
+            data = data.tz_localize(settings.NY_TIMEZONE_STR) # Use NY_TIMEZONE_STR from settings
         except Exception as e: # Handles cases like AmbiguousTimeError during DST changes
             logger.error(f"Strategy Engine: Failed to localize naive data to NY timezone for '{strategy_name}': {e}. Attempting to infer and convert.", exc_info=True)
-            # Fallback or error, depending on strictness. For now, let's attempt conversion if already localized to something else.
             try:
                  data = data.tz_convert(settings.NY_TIMEZONE_STR)
             except Exception as e_conv:
@@ -63,7 +95,7 @@ def generate_signals(
                 return pd.DataFrame()
 
     elif data.index.tz.zone != settings.NY_TIMEZONE.zone: # Compare zone strings for robustness
-        logger.info(f"Strategy Engine: Data timezone is {data.index.tz}, converting to NY timezone for '{strategy_name}'.")
+        logger.info(f"Strategy Engine: Data timezone is {data.index.tz}, converting to NY timezone ({settings.NY_TIMEZONE_STR}) for '{strategy_name}'.")
         try:
             data = data.tz_convert(settings.NY_TIMEZONE_STR)
         except Exception as e:
@@ -112,34 +144,43 @@ def generate_signals(
         
     return signals_df
 
+# Example of how to run this for testing (if needed, but typically run via app.py)
 if __name__ == '__main__':
-    # This section can be used for basic testing of the dispatcher
-    # Note: For this __main__ block to run correctly with the absolute import 'from services.strategies',
-    # you would need to run this script from the project root directory like:
-    # python -m services.strategy_engine
-    # Or ensure the project root is in PYTHONPATH.
+    # This block is for direct testing of strategy_engine.py.
+    # To make it work, you'd typically run: python -m services.strategy_engine
+    # from the project root directory.
     
-    # To make this runnable standalone for testing, we might need to adjust sys.path
-    import sys
-    import os
-    # Add project root to sys.path if this script is run directly
-    # This assumes the script is in Gap-Guardian-Strategy-Backtester-main/services/
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, PROJECT_ROOT)
+    # For robust testing, ensure PROJECT_ROOT is correctly identified and added if not already.
+    # This might involve more complex path logic if running from various locations.
+    # The sys.path modification in app.py is the primary mechanism for the app itself.
+    
+    print("Running strategy_engine.py as main script (for testing purposes).")
+    
+    # Example: Add project root to sys.path if not already there, for standalone testing
+    # This assumes this script is in 'project_root/services/strategy_engine.py'
+    module_path = os.path.abspath(__file__)
+    project_root_for_test = os.path.dirname(os.path.dirname(module_path)) # Up two levels
+    if project_root_for_test not in sys.path:
+        sys.path.insert(0, project_root_for_test)
+        print(f"[TEST MODE] Added to sys.path for testing: {project_root_for_test}")
+        # Re-attempt imports that might have failed if sys.path wasn't set
+        from config import settings as test_settings
+        from utils.logger import get_logger as test_get_logger
+        from services.data_loader import fetch_historical_data
+        from services.strategies import generate_gap_guardian_signals as gg_test
+    else:
+        print(f"[TEST MODE] Project root {project_root_for_test} already in sys.path.")
+        from config import settings as test_settings
+        from utils.logger import get_logger as test_get_logger
+        from services.data_loader import fetch_historical_data
+        from services.strategies import generate_gap_guardian_signals as gg_test
 
-    from services.data_loader import fetch_historical_data 
-    from datetime import date as dt_date
-    # Re-import config and utils if they were not found due to path issues before sys.path modification
-    from config import settings as main_settings # Use an alias to avoid conflict if settings was already imported
-    from utils.logger import get_logger as main_get_logger
 
-    logger_main_test = main_get_logger(__name__ + "_standalone_test")
-
+    logger_main_test = test_get_logger(__name__ + "_standalone_test")
 
     sample_ticker = "GC=F" # Gold
-    start_d = dt_date.today() - pd.Timedelta(days=20) 
-    end_d = dt_date.today()
+    start_d = pd.Timestamp.today().normalize() - pd.Timedelta(days=20)
+    end_d = pd.Timestamp.today().normalize()
     
     test_sl = 2.0 
     test_rrr = 1.5
@@ -148,12 +189,12 @@ if __name__ == '__main__':
     logger_main_test.info(f"--- Standalone Test: Strategy Dispatcher for {sample_ticker} on {test_tf} ---")
     
     try:
-        price_data_test = fetch_historical_data(sample_ticker, start_d, end_d, test_tf)
+        price_data_test = fetch_historical_data(sample_ticker, start_d.date(), end_d.date(), test_tf)
         
         if not price_data_test.empty:
             logger_main_test.info(f"Price data ({len(price_data_test)} rows) from {price_data_test.index.min()} to {price_data_test.index.max()}")
             
-            for strategy_to_test in main_settings.AVAILABLE_STRATEGIES:
+            for strategy_to_test in test_settings.AVAILABLE_STRATEGIES:
                 logger_main_test.info(f"-- Testing: {strategy_to_test} --")
                 params_for_generation = {
                     'data': price_data_test.copy(), 
@@ -162,8 +203,8 @@ if __name__ == '__main__':
                     'rrr': test_rrr
                 }
                 if strategy_to_test == "Gap Guardian":
-                    params_for_generation['entry_start_time'] = dt_time(main_settings.DEFAULT_ENTRY_WINDOW_START_HOUR, main_settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
-                    params_for_generation['entry_end_time'] = dt_time(main_settings.DEFAULT_ENTRY_WINDOW_END_HOUR, main_settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
+                    params_for_generation['entry_start_time'] = dt_time(test_settings.DEFAULT_ENTRY_WINDOW_START_HOUR, test_settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
+                    params_for_generation['entry_end_time'] = dt_time(test_settings.DEFAULT_ENTRY_WINDOW_END_HOUR, test_settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
 
                 generated_signals = generate_signals(**params_for_generation)
                 
@@ -175,4 +216,4 @@ if __name__ == '__main__':
             logger_main_test.warning(f"Could not fetch price data for {test_tf} to test dispatcher.")
     except Exception as e:
         logger_main_test.error(f"Error during standalone test of strategy_engine: {e}", exc_info=True)
-        logger_main_test.info("Ensure you run this test from the project root using 'python -m services.strategy_engine' or that PYTHONPATH is set correctly if issues persist.")
+
