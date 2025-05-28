@@ -12,6 +12,7 @@ from utils.logger import get_logger
 
 # Import strategy-specific generation functions using an absolute path
 # from the project root, assuming 'services' is a top-level package directory.
+# THIS IS THE CRITICAL LINE THAT NEEDS TO BE ABSOLUTE:
 from services.strategies import (
     generate_gap_guardian_signals,
     generate_unicorn_signals,
@@ -48,9 +49,22 @@ def generate_signals(
         return pd.DataFrame()
 
     # Ensure data is in NY timezone, as most strategies are time-sensitive to this market.
-    if data.index.tz != settings.NY_TIMEZONE:
+    if data.index.tz is None:
+        logger.warning(f"Strategy Engine: Data timezone is naive for '{strategy_name}', localizing to NY timezone.")
         try:
-            logger.info(f"Strategy Engine: Data timezone is {data.index.tz}, converting to NY timezone for '{strategy_name}'.")
+            data = data.tz_localize(settings.NY_TIMEZONE_STR)
+        except Exception as e: # Handles cases like AmbiguousTimeError during DST changes
+            logger.error(f"Strategy Engine: Failed to localize naive data to NY timezone for '{strategy_name}': {e}. Attempting to infer and convert.", exc_info=True)
+            # Fallback or error, depending on strictness. For now, let's attempt conversion if already localized to something else.
+            try:
+                 data = data.tz_convert(settings.NY_TIMEZONE_STR)
+            except Exception as e_conv:
+                logger.error(f"Strategy Engine: Failed to convert data to NY timezone after localization attempt for '{strategy_name}': {e_conv}.", exc_info=True)
+                return pd.DataFrame()
+
+    elif data.index.tz.zone != settings.NY_TIMEZONE.zone: # Compare zone strings for robustness
+        logger.info(f"Strategy Engine: Data timezone is {data.index.tz}, converting to NY timezone for '{strategy_name}'.")
+        try:
             data = data.tz_convert(settings.NY_TIMEZONE_STR)
         except Exception as e:
             logger.error(f"Strategy Engine: Failed to convert data to NY timezone for '{strategy_name}': {e}. Current tz: {data.index.tz}", exc_info=True)
@@ -84,7 +98,7 @@ def generate_signals(
             # Ensure SignalTime is also in NY timezone if it got converted to naive or UTC by mistake
             if signals_df['SignalTime'].dt.tz is None:
                 signals_df['SignalTime'] = signals_df['SignalTime'].dt.tz_localize(settings.NY_TIMEZONE_STR)
-            elif signals_df['SignalTime'].dt.tz.zone != settings.NY_TIMEZONE.zone : # Compare zone strings for robustness
+            elif signals_df['SignalTime'].dt.tz.zone != settings.NY_TIMEZONE.zone:
                  signals_df['SignalTime'] = signals_df['SignalTime'].dt.tz_convert(settings.NY_TIMEZONE_STR)
 
             signals_df.set_index('SignalTime', inplace=True, drop=False) # Keep SignalTime as a column too
@@ -105,8 +119,23 @@ if __name__ == '__main__':
     # python -m services.strategy_engine
     # Or ensure the project root is in PYTHONPATH.
     
+    # To make this runnable standalone for testing, we might need to adjust sys.path
+    import sys
+    import os
+    # Add project root to sys.path if this script is run directly
+    # This assumes the script is in Gap-Guardian-Strategy-Backtester-main/services/
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+
     from services.data_loader import fetch_historical_data 
     from datetime import date as dt_date
+    # Re-import config and utils if they were not found due to path issues before sys.path modification
+    from config import settings as main_settings # Use an alias to avoid conflict if settings was already imported
+    from utils.logger import get_logger as main_get_logger
+
+    logger_main_test = main_get_logger(__name__ + "_standalone_test")
+
 
     sample_ticker = "GC=F" # Gold
     start_d = dt_date.today() - pd.Timedelta(days=20) 
@@ -116,17 +145,16 @@ if __name__ == '__main__':
     test_rrr = 1.5
     test_tf = "15m"
 
-    print(f"\n--- Testing Strategy Dispatcher for {sample_ticker} on {test_tf} ---")
-    # Ensure that settings and other utils are accessible if running this standalone
-    # This might require adjusting sys.path if run directly and not as part of the app
+    logger_main_test.info(f"--- Standalone Test: Strategy Dispatcher for {sample_ticker} on {test_tf} ---")
+    
     try:
         price_data_test = fetch_historical_data(sample_ticker, start_d, end_d, test_tf)
         
         if not price_data_test.empty:
-            print(f"Price data ({len(price_data_test)} rows) from {price_data_test.index.min()} to {price_data_test.index.max()}")
+            logger_main_test.info(f"Price data ({len(price_data_test)} rows) from {price_data_test.index.min()} to {price_data_test.index.max()}")
             
-            for strategy_to_test in settings.AVAILABLE_STRATEGIES:
-                print(f"\n-- Testing: {strategy_to_test} --")
+            for strategy_to_test in main_settings.AVAILABLE_STRATEGIES:
+                logger_main_test.info(f"-- Testing: {strategy_to_test} --")
                 params_for_generation = {
                     'data': price_data_test.copy(), 
                     'strategy_name': strategy_to_test,
@@ -134,18 +162,17 @@ if __name__ == '__main__':
                     'rrr': test_rrr
                 }
                 if strategy_to_test == "Gap Guardian":
-                    params_for_generation['entry_start_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_START_HOUR, settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
-                    params_for_generation['entry_end_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_END_HOUR, settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
+                    params_for_generation['entry_start_time'] = dt_time(main_settings.DEFAULT_ENTRY_WINDOW_START_HOUR, main_settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
+                    params_for_generation['entry_end_time'] = dt_time(main_settings.DEFAULT_ENTRY_WINDOW_END_HOUR, main_settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
 
                 generated_signals = generate_signals(**params_for_generation)
                 
                 if not generated_signals.empty:
-                    print(f"Generated Signals ({len(generated_signals)}):\n{generated_signals.head()}")
+                    logger_main_test.info(f"Generated Signals ({len(generated_signals)}):\n{generated_signals.head()}")
                 else:
-                    print(f"No signals generated for {strategy_to_test}.")
+                    logger_main_test.info(f"No signals generated for {strategy_to_test}.")
         else:
-            print(f"Could not fetch price data for {test_tf} to test dispatcher.")
+            logger_main_test.warning(f"Could not fetch price data for {test_tf} to test dispatcher.")
     except Exception as e:
-        print(f"Error during standalone test of strategy_engine: {e}")
-        print("Ensure you run this test from the project root using 'python -m services.strategy_engine' or that PYTHONPATH is set correctly.")
-
+        logger_main_test.error(f"Error during standalone test of strategy_engine: {e}", exc_info=True)
+        logger_main_test.info("Ensure you run this test from the project root using 'python -m services.strategy_engine' or that PYTHONPATH is set correctly if issues persist.")
