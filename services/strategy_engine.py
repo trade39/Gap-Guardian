@@ -2,6 +2,7 @@
 """
 Dispatcher for generating trading signals based on the selected strategy.
 Imports and calls strategy-specific signal generation functions.
+Uses absolute import for the 'strategies' submodule.
 """
 import pandas as pd
 from datetime import time as dt_time
@@ -9,8 +10,9 @@ from datetime import time as dt_time
 from config import settings # For NY_TIMEZONE and potentially other shared settings
 from utils.logger import get_logger
 
-# Import strategy-specific generation functions
-from .strategies import (
+# Import strategy-specific generation functions using an absolute path
+# from the project root, assuming 'services' is a top-level package directory.
+from services.strategies import (
     generate_gap_guardian_signals,
     generate_unicorn_signals,
     generate_silver_bullet_signals
@@ -75,14 +77,14 @@ def generate_signals(
     if not signals_df.empty:
         if 'SignalTime' not in signals_df.columns:
             logger.error(f"Strategy Engine: '{strategy_name}' did not return 'SignalTime' column.")
-            return pd.DataFrame() # Or handle by trying to use index if it's the signal time
+            return pd.DataFrame()
 
         try:
             signals_df['SignalTime'] = pd.to_datetime(signals_df['SignalTime'])
             # Ensure SignalTime is also in NY timezone if it got converted to naive or UTC by mistake
             if signals_df['SignalTime'].dt.tz is None:
                 signals_df['SignalTime'] = signals_df['SignalTime'].dt.tz_localize(settings.NY_TIMEZONE_STR)
-            elif signals_df['SignalTime'].dt.tz != settings.NY_TIMEZONE:
+            elif signals_df['SignalTime'].dt.tz.zone != settings.NY_TIMEZONE.zone : # Compare zone strings for robustness
                  signals_df['SignalTime'] = signals_df['SignalTime'].dt.tz_convert(settings.NY_TIMEZONE_STR)
 
             signals_df.set_index('SignalTime', inplace=True, drop=False) # Keep SignalTime as a column too
@@ -98,40 +100,52 @@ def generate_signals(
 
 if __name__ == '__main__':
     # This section can be used for basic testing of the dispatcher
-    from services.data_loader import fetch_historical_data # Adjust import path as necessary
+    # Note: For this __main__ block to run correctly with the absolute import 'from services.strategies',
+    # you would need to run this script from the project root directory like:
+    # python -m services.strategy_engine
+    # Or ensure the project root is in PYTHONPATH.
+    
+    from services.data_loader import fetch_historical_data 
     from datetime import date as dt_date
 
     sample_ticker = "GC=F" # Gold
-    start_d = dt_date.today() - pd.Timedelta(days=20) # Shorter period for quick test
+    start_d = dt_date.today() - pd.Timedelta(days=20) 
     end_d = dt_date.today()
     
-    test_sl = 2.0 # Example SL for Gold
+    test_sl = 2.0 
     test_rrr = 1.5
     test_tf = "15m"
 
     print(f"\n--- Testing Strategy Dispatcher for {sample_ticker} on {test_tf} ---")
-    price_data_test = fetch_historical_data(sample_ticker, start_d, end_d, test_tf)
-    
-    if not price_data_test.empty:
-        print(f"Price data ({len(price_data_test)} rows) from {price_data_test.index.min()} to {price_data_test.index.max()}")
+    # Ensure that settings and other utils are accessible if running this standalone
+    # This might require adjusting sys.path if run directly and not as part of the app
+    try:
+        price_data_test = fetch_historical_data(sample_ticker, start_d, end_d, test_tf)
         
-        for strategy_to_test in settings.AVAILABLE_STRATEGIES:
-            print(f"\n-- Testing: {strategy_to_test} --")
-            params_for_generation = {
-                'data': price_data_test.copy(), # Pass a copy to avoid modification issues
-                'strategy_name': strategy_to_test,
-                'stop_loss_points': test_sl,
-                'rrr': test_rrr
-            }
-            if strategy_to_test == "Gap Guardian":
-                params_for_generation['entry_start_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_START_HOUR, settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
-                params_for_generation['entry_end_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_END_HOUR, settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
-
-            generated_signals = generate_signals(**params_for_generation)
+        if not price_data_test.empty:
+            print(f"Price data ({len(price_data_test)} rows) from {price_data_test.index.min()} to {price_data_test.index.max()}")
             
-            if not generated_signals.empty:
-                print(f"Generated Signals ({len(generated_signals)}):\n{generated_signals.head()}")
-            else:
-                print(f"No signals generated for {strategy_to_test}.")
-    else:
-        print(f"Could not fetch price data for {test_tf} to test dispatcher.")
+            for strategy_to_test in settings.AVAILABLE_STRATEGIES:
+                print(f"\n-- Testing: {strategy_to_test} --")
+                params_for_generation = {
+                    'data': price_data_test.copy(), 
+                    'strategy_name': strategy_to_test,
+                    'stop_loss_points': test_sl,
+                    'rrr': test_rrr
+                }
+                if strategy_to_test == "Gap Guardian":
+                    params_for_generation['entry_start_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_START_HOUR, settings.DEFAULT_ENTRY_WINDOW_START_MINUTE)
+                    params_for_generation['entry_end_time'] = dt_time(settings.DEFAULT_ENTRY_WINDOW_END_HOUR, settings.DEFAULT_ENTRY_WINDOW_END_MINUTE)
+
+                generated_signals = generate_signals(**params_for_generation)
+                
+                if not generated_signals.empty:
+                    print(f"Generated Signals ({len(generated_signals)}):\n{generated_signals.head()}")
+                else:
+                    print(f"No signals generated for {strategy_to_test}.")
+        else:
+            print(f"Could not fetch price data for {test_tf} to test dispatcher.")
+    except Exception as e:
+        print(f"Error during standalone test of strategy_engine: {e}")
+        print("Ensure you run this test from the project root using 'python -m services.strategy_engine' or that PYTHONPATH is set correctly.")
+
