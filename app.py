@@ -41,7 +41,7 @@ try:
     from config import settings
     from utils import plotting, logger as app_logger
     # The following import is where the error chain was starting
-    from services import data_loader, strategy_engine, backtester, optimizer # This is line 47 in your traceback
+    from services import data_loader, strategy_engine, backtester, optimizer # This was line 47 in your traceback
     print(f"--- [DEBUG app.py @ {os.path.basename(APP_FILE_PATH)}] Successfully imported config, utils, services ---")
 except ImportError as e:
     print(f"--- [CRITICAL ERROR app.py @ {os.path.basename(APP_FILE_PATH)}] Failed to import config, utils, or services. Error: {e} ---")
@@ -50,7 +50,14 @@ except ImportError as e:
 
 logger = app_logger.get_logger(__name__)
 
-st.set_page_config(page_title=settings.APP_TITLE, page_icon="🛡️📈", layout="wide", initial_sidebar_state="expanded", theme="dark") # Added theme="dark"
+# Corrected st.set_page_config: removed invalid 'theme' argument
+# Theme should be set in .streamlit/config.toml
+st.set_page_config(
+    page_title=settings.APP_TITLE,
+    page_icon="🛡️📈", # Can be an emoji or a URL to an image
+    layout="wide",
+    initial_sidebar_state="expanded"
+) # This was line 53
 
 def load_custom_css(css_file_path):
     """Loads custom CSS from a file and applies it."""
@@ -64,10 +71,8 @@ def load_custom_css(css_file_path):
             logger.info(f"Successfully loaded CSS from: {full_css_path}")
     except FileNotFoundError:
         logger.warning(f"CSS file not found. Tried path: {full_css_path} and original path: {css_file_path}")
-        # st.warning(f"CSS file not found at path: {css_file_path}") # Covered by logger
     except Exception as e:
         logger.warning(f"Error loading CSS file '{css_file_path}': {e}")
-        # st.warning(f"Error loading CSS file '{css_file_path}': {e}") # Covered by logger
 
 load_custom_css("static/style.css")
 
@@ -836,4 +841,3 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.info(f"App Version: 0.6.3 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}") 
 st.sidebar.caption("Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management.")
-
