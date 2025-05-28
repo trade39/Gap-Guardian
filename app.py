@@ -1,73 +1,73 @@
 # app.py
 """
 Main Streamlit application file for the Multi-Strategy Backtester.
-Handles UI, user inputs, and orchestrates the backtesting process.
-Allows selection of different trading strategies and displays their logic.
 """
 import sys
 import os
 
 # --- sys.path modification and diagnostics ---
-# Assuming app.py is in the project root directory (e.g., 'gap-guardian')
-# which contains 'services', 'utils', 'config' as subdirectories.
+# Goal: Ensure the project root directory is the first entry in sys.path.
+# This script (app.py) is assumed to be in the project root.
 APP_FILE_PATH = os.path.abspath(__file__)
 PROJECT_ROOT = os.path.dirname(APP_FILE_PATH)
 
-print(f"--- [DEBUG app.py] ---")
-print(f"APP_FILE_PATH: {APP_FILE_PATH}")
-print(f"Calculated PROJECT_ROOT: {PROJECT_ROOT}")
-print(f"Original sys.path: {sys.path}")
+print(f"--- [DEBUG app.py @ {os.path.basename(APP_FILE_PATH)}] ---")
+print(f"    APP_FILE_PATH: {APP_FILE_PATH}")
+print(f"    Calculated PROJECT_ROOT: {PROJECT_ROOT}")
+print(f"    Original sys.path: {sys.path}")
 
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-    print(f"PROJECT_ROOT ('{PROJECT_ROOT}') was not in sys.path. Added it to the beginning.")
+    print(f"    PROJECT_ROOT ('{PROJECT_ROOT}') was NOT in sys.path. Added to beginning.")
+elif sys.path[0] != PROJECT_ROOT:
+    sys.path.remove(PROJECT_ROOT)
+    sys.path.insert(0, PROJECT_ROOT)
+    print(f"    PROJECT_ROOT ('{PROJECT_ROOT}') was in sys.path but not at index 0. Moved to beginning.")
 else:
-    # If already in sys.path, ensure it's at the beginning for priority
-    if sys.path[0] != PROJECT_ROOT:
-        sys.path.remove(PROJECT_ROOT)
-        sys.path.insert(0, PROJECT_ROOT)
-        print(f"PROJECT_ROOT ('{PROJECT_ROOT}') was in sys.path but not at index 0. Moved it to the beginning.")
-    else:
-        print(f"PROJECT_ROOT ('{PROJECT_ROOT}') is already the first item in sys.path.")
+    print(f"    PROJECT_ROOT ('{PROJECT_ROOT}') is already the first item in sys.path.")
 
-print(f"Final sys.path for app.py: {sys.path}")
-print(f"--- [END DEBUG app.py] ---")
+print(f"    Final sys.path for app.py: {sys.path}")
+print(f"--- [END DEBUG app.py @ {os.path.basename(APP_FILE_PATH)}] ---")
 # --- end of sys.path modification and diagnostics ---
 
-# Now, proceed with other imports
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta, datetime, time as dt_time
 
 # These imports depend on the sys.path being correctly set up.
-from config import settings # This should now find config/settings.py
-from utils import plotting, logger as app_logger # This should now find utils/
-# The following import is where the error was occurring
-from services import data_loader, strategy_engine, backtester, optimizer # This is line 24 in your latest traceback
+print(f"--- [DEBUG app.py @ {os.path.basename(APP_FILE_PATH)}] Attempting to import config, utils, services ---")
+try:
+    from config import settings
+    from utils import plotting, logger as app_logger
+    # The following import is where the error chain was starting
+    from services import data_loader, strategy_engine, backtester, optimizer # This is line 47 in your traceback
+    print(f"--- [DEBUG app.py @ {os.path.basename(APP_FILE_PATH)}] Successfully imported config, utils, services ---")
+except ImportError as e:
+    print(f"--- [CRITICAL ERROR app.py @ {os.path.basename(APP_FILE_PATH)}] Failed to import config, utils, or services. Error: {e} ---")
+    print(f"    Current sys.path during this error: {sys.path}")
+    raise # Re-raise the error to stop execution and show traceback
 
 logger = app_logger.get_logger(__name__)
 
-st.set_page_config(page_title=settings.APP_TITLE, page_icon="🛡️📈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title=settings.APP_TITLE, page_icon="🛡️📈", layout="wide", initial_sidebar_state="expanded", theme="dark") # Added theme="dark"
 
 def load_custom_css(css_file_path):
     """Loads custom CSS from a file and applies it."""
     try:
-        # Construct path relative to this app.py file if style.css is in 'static' subdir
-        # For Streamlit sharing, paths are usually relative to the main app script.
         full_css_path = os.path.join(os.path.dirname(__file__), css_file_path)
-        if not os.path.exists(full_css_path): # Fallback for different execution contexts
-            full_css_path = css_file_path
+        if not os.path.exists(full_css_path):
+            full_css_path = css_file_path # Fallback
 
         with open(full_css_path) as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
             logger.info(f"Successfully loaded CSS from: {full_css_path}")
     except FileNotFoundError:
         logger.warning(f"CSS file not found. Tried path: {full_css_path} and original path: {css_file_path}")
-        st.warning(f"CSS file not found at path: {css_file_path}")
+        # st.warning(f"CSS file not found at path: {css_file_path}") # Covered by logger
     except Exception as e:
         logger.warning(f"Error loading CSS file '{css_file_path}': {e}")
-        st.warning(f"Error loading CSS file '{css_file_path}': {e}")
+        # st.warning(f"Error loading CSS file '{css_file_path}': {e}") # Covered by logger
 
 load_custom_css("static/style.css")
 
@@ -677,25 +677,22 @@ if main_tabs_to_display_names:
 
                 def display_styled_metric_card(column, label, value_raw, is_currency=True, is_percentage=False, precision=2, profit_factor_logic=False, mdd_logic=False):
                     formatted_value = format_metric_value(value_raw, precision, is_currency, is_percentage)
-                    color_style = NEUTRAL_COLOR # Default color for text (will be overridden by theme anyway)
+                    # For dark theme, Streamlit handles text color. We only apply specific P&L colors.
+                    color_style_str = "" # Default: no specific color override
                     
-                    # Specific color logic for metrics
                     if not (pd.isna(value_raw) or value_raw is None):
-                        if profit_factor_logic: # Profit Factor: >1 good, <1 bad
-                            if value_raw > 1: color_style = POSITIVE_COLOR
-                            elif value_raw < 1 and value_raw != 0 : color_style = NEGATIVE_COLOR
-                            elif value_raw == 0 and performance_summary.get('Gross Profit', 0) == 0 and performance_summary.get('Gross Loss', 0) == 0: color_style = NEUTRAL_COLOR
-                            elif value_raw == 0 : color_style = NEGATIVE_COLOR 
-                        elif mdd_logic: # Max Drawdown: Always negative or zero. More negative is worse.
-                            if value_raw < 0: color_style = NEGATIVE_COLOR
-                            elif value_raw == 0: color_style = NEUTRAL_COLOR 
-                        else: # General P&L like metrics
-                            if value_raw > 0: color_style = POSITIVE_COLOR
-                            elif value_raw < 0: color_style = NEGATIVE_COLOR
+                        if profit_factor_logic: 
+                            if value_raw > 1: color_style_str = f"color: {POSITIVE_COLOR};"
+                            elif value_raw < 1 and value_raw != 0 : color_style_str = f"color: {NEGATIVE_COLOR};"
+                        elif mdd_logic: 
+                            if value_raw < 0: color_style_str = f"color: {NEGATIVE_COLOR};"
+                        else: 
+                            if value_raw > 0: color_style_str = f"color: {POSITIVE_COLOR};"
+                            elif value_raw < 0: color_style_str = f"color: {NEGATIVE_COLOR};"
                     
                     column.markdown(f"""<div class="metric-card">
                                             <div class="metric-label">{label}</div>
-                                            <div class="metric-value" style="color: {color_style};">{formatted_value}</div>
+                                            <div class="metric-value" style="{color_style_str}">{formatted_value}</div>
                                         </div>""", unsafe_allow_html=True)
                 
                 # Display metrics in columns
@@ -715,7 +712,6 @@ if main_tabs_to_display_names:
                 
                 # Detail Tabs within Performance Tab
                 detail_tabs_list_names = ["📈 Equity Curve", "📊 Trades on Price", "📋 Trade Log"]
-                # Conditionally add Signals tab if not WFO (WFO signals are per-fold, not aggregated for this view)
                 if not st.session_state.signals.empty and analysis_mode_ui != "Walk-Forward Optimization":
                     detail_tabs_list_names.append("🔍 Generated Signals (Last Run)")
                 detail_tabs_list_names.append("💾 Raw Price Data (Full Period)")
@@ -727,8 +723,8 @@ if main_tabs_to_display_names:
                     plot_function_equity = plotting.plot_equity_curve
                     if analysis_mode_ui == "Walk-Forward Optimization" and "oos_equity_curve" in results_to_display:
                         plot_title_equity = "WFO: Aggregated Out-of-Sample Equity"
-                        plot_function_equity = plotting.plot_wfo_equity_curve # Use WFO specific plotter if available
-                        equity_curve_display = results_to_display["oos_equity_curve"] # Ensure correct equity curve for WFO
+                        plot_function_equity = plotting.plot_wfo_equity_curve 
+                        equity_curve_display = results_to_display["oos_equity_curve"] 
                     
                     if not equity_curve_display.empty:
                         st.plotly_chart(plot_function_equity(equity_curve_display, title=plot_title_equity), use_container_width=True)
@@ -744,15 +740,15 @@ if main_tabs_to_display_names:
                         st.dataframe(trades_df_display.style.format({col: '{:.2f}' for col in trades_df_display.select_dtypes(include='float').columns}), height=300, use_container_width=True)
                     else: st.info("No trades were executed in this run.")
 
-                idx_offset_details = 0 # To manage index for conditionally added tab
+                idx_offset_details = 0 
                 if "🔍 Generated Signals (Last Run)" in detail_tabs_list_names:
-                    with detail_tabs_created[3]: # Generated Signals
+                    with detail_tabs_created[3]: 
                         if not st.session_state.signals.empty:
                             st.dataframe(st.session_state.signals.style.format({col: '{:.2f}' for col in st.session_state.signals.select_dtypes(include='float').columns}), height=300, use_container_width=True)
                         else: st.info("No signals were generated for the last single backtest or optimization run.")
                     idx_offset_details = 1
                 
-                with detail_tabs_created[3 + idx_offset_details]: # Raw Price Data
+                with detail_tabs_created[3 + idx_offset_details]: 
                     if not st.session_state.price_data.empty:
                         st.markdown(f"Full period OHLCV data for **{selected_ticker_name} ({ticker_symbol})** ({len(st.session_state.price_data)} rows). Displaying first 100 rows.")
                         st.dataframe(st.session_state.price_data.head(100), height=300, use_container_width=True)
@@ -766,14 +762,12 @@ if main_tabs_to_display_names:
             else:
                 st.info("Run an analysis to see performance details. If an analysis was run, results might be empty if no trades occurred or data was insufficient.")
 
-    # Tab 2: Optimization Results (Full Period) - Only if Parameter Optimization was run
     opt_tab_idx = main_tabs_to_display_names.index("⚙️ Optimization Results (Full Period)") if "⚙️ Optimization Results (Full Period)" in main_tabs_to_display_names else -1
     if opt_tab_idx != -1:
         with tab_map["⚙️ Optimization Results (Full Period)"]:
             opt_df_to_display = st.session_state.optimization_results_df
             if not opt_df_to_display.empty:
                 st.markdown(f"#### Optimization Results Table ({selected_strategy_name} - Full Period - {opt_algo_ui})")
-                # Format float columns for better readability
                 float_cols_opt_table = [col for col in opt_df_to_display.columns if opt_df_to_display[col].dtype == 'float64']
                 st.dataframe(opt_df_to_display.style.format({col: '{:.2f}' for col in float_cols_opt_table}), height=400, use_container_width=True)
                 try:
@@ -783,7 +777,6 @@ if main_tabs_to_display_names:
                     logger.error(f"Error generating CSV for optimization results: {e_csv_opt}", exc_info=True)
                     st.warning("Could not prepare optimization results for download.")
 
-                # Heatmap for Grid Search (if SL and RRR were optimized)
                 if opt_algo_ui == "Grid Search" and 'SL Points' in opt_df_to_display.columns and 'RRR' in opt_df_to_display.columns:
                     st.markdown(f"#### Optimization Heatmap: {opt_metric_ui} (SL vs RRR - Full Period)")
                     try:
@@ -794,12 +787,11 @@ if main_tabs_to_display_names:
                         st.warning(f"Could not generate heatmap. Error: {e_hm}")
                 elif opt_algo_ui == "Grid Search":
                      st.info("Heatmap for SL vs RRR requires 'SL Points' and 'RRR' to be part of the grid search parameters.")
-                else: # Random Search
+                else: 
                     st.info("Heatmap is typically generated for Grid Search results. Review the table for Random Search optimization details.")
             else:
                 st.info("No full-period optimization results available. Ensure 'Parameter Optimization' mode was run and completed successfully.")
 
-    # Tab 3: Walk-Forward Analysis - Only if WFO was run
     wfo_tab_idx = main_tabs_to_display_names.index("🚶 Walk-Forward Analysis") if "🚶 Walk-Forward Analysis" in main_tabs_to_display_names else -1
     if wfo_tab_idx != -1:
         with tab_map["🚶 Walk-Forward Analysis"]:
@@ -832,18 +824,16 @@ if main_tabs_to_display_names:
                         st.warning("Could not prepare WFO OOS trades for download.")
                 else:
                     st.info("No out-of-sample trades were generated during the Walk-Forward Optimization.")
-                # Note: The aggregated OOS performance and equity curve are shown in the "Backtest Performance" tab when WFO is run.
             else:
                 st.info("No Walk-Forward Optimization results available. Ensure 'Walk-Forward Optimization' mode was run and completed successfully.")
 
-elif st.session_state.run_analysis_clicked_count > 0 : # If analysis was run but no tabs generated (e.g., all results empty)
+elif st.session_state.run_analysis_clicked_count > 0 : 
     st.info("Analysis was run. If results are not displayed, it might be due to no trades or data for the selected parameters, or an error during processing. Check logs if errors are suspected.")
-else: # Initial state before any analysis run
+else: 
     if not any([st.session_state.backtest_results, not st.session_state.optimization_results_df.empty, st.session_state.wfo_results]):
         st.info("Configure parameters in the sidebar and click 'Run Analysis' to view results.")
 
-# --- Footer and Disclaimer ---
 st.sidebar.markdown("---")
-st.sidebar.info(f"App Version: 0.6.2 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}") # Version increment
+st.sidebar.info(f"App Version: 0.6.3 | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}") 
 st.sidebar.caption("Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management.")
 
