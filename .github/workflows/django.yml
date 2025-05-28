@@ -1,92 +1,84 @@
-# .github/workflows/django.yml
+# .github/workflows/django_ci.yml
 
-name: Django CI/CD
+name: Django CI
 
 # Controls when the workflow will run
 on:
   push:
-    branches: [ "main", "develop" ] # Triggers on pushes to main or develop branches
+    branches: [ "main", "develop" ] # Triggers the workflow on push events to main and develop branches
   pull_request:
-    branches: [ "main", "develop" ] # Triggers on pull requests to main or develop branches
-  workflow_dispatch: # Allows manual triggering from the Actions tab
+    branches: [ "main", "develop" ] # Triggers the workflow on pull request events to main and develop branches
 
 jobs:
-  build_and_test:
-    name: Build and Test Django App
+  build:
     runs-on: ubuntu-latest # Specifies the runner environment
     strategy:
-      fail-fast: false # Ensures all matrix jobs complete even if one fails
+      max-parallel: 4 # Max number of parallel jobs
       matrix:
-        python-version: ["3.9", "3.10", "3.11"] # Define Python versions to test against
+        python-version: ["3.9", "3.10", "3.11"] # Runs the job for specified Python versions
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4 # Checks out your repository under $GITHUB_WORKSPACE
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      # Checks out your repository under $GITHUB_WORKSPACE, so your job can access it
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: 'pip' # Caches pip dependencies for faster builds
+      # Sets up the specified Python version
 
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # If you have a separate requirements_dev.txt for linters/testing tools:
-        # pip install -r requirements_dev.txt
+        # It's good practice to install project-specific dependencies like linters here if they are in requirements.txt
+        # Or install them separately:
+        # pip install flake8 black ruff # Add other linters/formatters as needed
+      # Upgrades pip and installs dependencies from requirements.txt
 
-    - name: Lint with Flake8
+    - name: Lint with Flake8 (Example)
       run: |
-        # Stop the build if there are Python syntax errors or undefined names
-        pip install flake8
+        # stop the build if there are Python syntax errors or undefined names
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-      # You can add other linters like Pylint or Black here
-      # Example for Black (formatting check):
-      # run: |
-      #   pip install black
-      #   black --check .
+      # Runs Flake8 linter. Adjust rules as per your project's standards.
+      # Consider adding other linters/formatters like Black or Ruff.
 
-    - name: Run Django Tests
-      env: # Environment variables for the test step
-        # --- Django Settings ---
-        # It's crucial to use a separate test settings file or environment variables
-        # to avoid using your production database or other sensitive settings during tests.
-        DJANGO_SETTINGS_MODULE: your_project_name.settings_test # Replace 'your_project_name'
-        # --- Database Settings (Example for SQLite in-memory) ---
-        # If you use PostgreSQL or MySQL, you'll need to set up a service container
-        # or use environment variables to connect to a test database.
-        DATABASE_URL: "sqlite:///:memory:"
-        # --- Other Environment Variables ---
-        # SECRET_KEY: "a-dummy-secret-key-for-testing" # Django requires a SECRET_KEY
-        # DEBUG: "False"
+    - name: Run Tests
+      env: # Environment variables for the test run
+        SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY_TEST }} # Example: Using a GitHub secret for Django's SECRET_KEY
+        DEBUG: "False"
+        DATABASE_URL: "sqlite:///:memory:" # Example: Using SQLite in-memory for tests
+        # Add other environment variables your Django settings might need for tests
+        # Ensure your settings.py is configured to use these environment variables for testing
       run: |
-        # Ensure your_project_name.settings_test exists or configure settings via env vars
-        # For example, if your manage.py is in the root:
         python manage.py test
-        # If manage.py is in a subdirectory (e.g., 'src'):
-        # python src/manage.py test
+      # Executes Django tests.
+      # Ensure your settings are configured to pick up environment variables for testing
+      # (e.g., using an in-memory SQLite database to speed up tests and avoid external dependencies).
 
-    # --- Optional: Build Step (if applicable) ---
-    # - name: Build static assets (if you have a frontend build process)
+    # Optional: Add steps for building Docker images, deploying to staging/production, etc.
+    # - name: Build Docker image
+    #   if: github.ref == 'refs/heads/main' && github.event_name == 'push' # Example: Only build on push to main
     #   run: |
-    #     # Example: npm install && npm run build
-    #     python manage.py collectstatic --noinput
+    #     docker build -t my-django-app .
+    #     # docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+    #     # docker push my-django-app:latest
 
-    # --- Optional: Security Scan (Example with Bandit) ---
-    # - name: Security Scan with Bandit
-    #   run: |
-    #     pip install bandit
-    #     bandit -r . -ll -ii # Scan for common security issues
+    # - name: Deploy to Staging (Example)
+    #   if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    #   uses: some-deploy-action@v1 # Replace with your deployment action/script
+    #   with:
+    #     server_ip: ${{ secrets.STAGING_SERVER_IP }}
+    #     ssh_private_key: ${{ secrets.STAGING_SSH_KEY }}
+    #     app_name: "my-django-app-staging"
 
-    # --- Placeholder for Deployment ---
-    # This section would be added if you want to deploy on successful builds/tests on a specific branch
-    # - name: Deploy to Production (Example - needs configuration)
-    #   if: github.ref == 'refs/heads/main' && github.event_name == 'push' # Only deploy on push to main
-    #   run: |
-    #     echo "Deployment steps would go here..."
-    #     # Example: heroku deploy, aws deploy, docker push, etc.
-    #   env:
-    #     HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }} # Example of using secrets
+    # - name: Deploy to Production (Example)
+    #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    #   uses: some-deploy-action@v1 # Replace with your deployment action/script
+    #   with:
+    #     server_ip: ${{ secrets.PROD_SERVER_IP }}
+    #     ssh_private_key: ${{ secrets.PROD_SSH_KEY }}
+    #     app_name: "my-django-app-prod"
