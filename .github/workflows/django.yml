@@ -1,0 +1,92 @@
+# .github/workflows/django.yml
+
+name: Django CI/CD
+
+# Controls when the workflow will run
+on:
+  push:
+    branches: [ "main", "develop" ] # Triggers on pushes to main or develop branches
+  pull_request:
+    branches: [ "main", "develop" ] # Triggers on pull requests to main or develop branches
+  workflow_dispatch: # Allows manual triggering from the Actions tab
+
+jobs:
+  build_and_test:
+    name: Build and Test Django App
+    runs-on: ubuntu-latest # Specifies the runner environment
+    strategy:
+      fail-fast: false # Ensures all matrix jobs complete even if one fails
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"] # Define Python versions to test against
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4 # Checks out your repository under $GITHUB_WORKSPACE
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip' # Caches pip dependencies for faster builds
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        # If you have a separate requirements_dev.txt for linters/testing tools:
+        # pip install -r requirements_dev.txt
+
+    - name: Lint with Flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      # You can add other linters like Pylint or Black here
+      # Example for Black (formatting check):
+      # run: |
+      #   pip install black
+      #   black --check .
+
+    - name: Run Django Tests
+      env: # Environment variables for the test step
+        # --- Django Settings ---
+        # It's crucial to use a separate test settings file or environment variables
+        # to avoid using your production database or other sensitive settings during tests.
+        DJANGO_SETTINGS_MODULE: your_project_name.settings_test # Replace 'your_project_name'
+        # --- Database Settings (Example for SQLite in-memory) ---
+        # If you use PostgreSQL or MySQL, you'll need to set up a service container
+        # or use environment variables to connect to a test database.
+        DATABASE_URL: "sqlite:///:memory:"
+        # --- Other Environment Variables ---
+        # SECRET_KEY: "a-dummy-secret-key-for-testing" # Django requires a SECRET_KEY
+        # DEBUG: "False"
+      run: |
+        # Ensure your_project_name.settings_test exists or configure settings via env vars
+        # For example, if your manage.py is in the root:
+        python manage.py test
+        # If manage.py is in a subdirectory (e.g., 'src'):
+        # python src/manage.py test
+
+    # --- Optional: Build Step (if applicable) ---
+    # - name: Build static assets (if you have a frontend build process)
+    #   run: |
+    #     # Example: npm install && npm run build
+    #     python manage.py collectstatic --noinput
+
+    # --- Optional: Security Scan (Example with Bandit) ---
+    # - name: Security Scan with Bandit
+    #   run: |
+    #     pip install bandit
+    #     bandit -r . -ll -ii # Scan for common security issues
+
+    # --- Placeholder for Deployment ---
+    # This section would be added if you want to deploy on successful builds/tests on a specific branch
+    # - name: Deploy to Production (Example - needs configuration)
+    #   if: github.ref == 'refs/heads/main' && github.event_name == 'push' # Only deploy on push to main
+    #   run: |
+    #     echo "Deployment steps would go here..."
+    #     # Example: heroku deploy, aws deploy, docker push, etc.
+    #   env:
+    #     HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }} # Example of using secrets
