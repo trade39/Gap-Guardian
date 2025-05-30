@@ -72,7 +72,7 @@ def load_custom_css(css_file_path):
         if not os.path.exists(full_css_path):
             # Fallback for cases where css_file_path might be absolute or differently relative
             logger.warning(f"CSS file not found at primary constructed path: {full_css_path}. Trying original path: {css_file_path}")
-            full_css_path = css_file_path 
+            full_css_path = css_file_path
             if not os.path.exists(full_css_path): # Check fallback path too
                  logger.error(f"CSS file still not found at fallback path: {full_css_path}. CSS will not be loaded.")
                  return
@@ -681,16 +681,16 @@ if main_tabs_to_display_names:
                 
                 summary_details_md = f"""
                 <div class='performance-summary-details'>
-                    <span class='summary-parameter-detail'>**Strategy:** {strat_display_info}</span>
-                    <span class='summary-parameter-detail'>**Symbol:** {symbol_display_info}</span>
-                    <span class='summary-parameter-detail'>**Source:** {run_source_info}</span>
-                    <span class='summary-parameter-detail'>**Timeframe:** {tf_display_info}</span>
+                    <span class='summary-parameter-detail'>Strategy: {strat_display_info}</span>
+                    <span class='summary-parameter-detail'>Symbol: {symbol_display_info}</span>
+                    <span class='summary-parameter-detail'>Source: {run_source_info}</span>
+                    <span class='summary-parameter-detail'>Timeframe: {tf_display_info}</span>
                 """
                 entry_display_val_info = run_params_info.get("EntryDisplay", "")
                 if entry_display_val_info:
-                    summary_details_md += f"<span class='summary-parameter-detail'>**Parameters:** {entry_display_val_info}</span>"
+                    summary_details_md += f"<span class='summary-parameter-detail'>Parameters: {entry_display_val_info}</span>"
                 elif run_params_info.get("SL") is not None and run_params_info.get("RRR") is not None:
-                    summary_details_md += f"<span class='summary-parameter-detail'>**Parameters:** SL: {float(run_params_info.get('SL')):.2f}, RRR: {float(run_params_info.get('RRR')):.1f}</span>"
+                    summary_details_md += f"<span class='summary-parameter-detail'>Parameters: SL: {float(run_params_info.get('SL')):.2f}, RRR: {float(run_params_info.get('RRR')):.1f}</span>"
                 summary_details_md += "</div>"
                 st.markdown(summary_details_md, unsafe_allow_html=True)
                 st.markdown("---") # Visual separator
