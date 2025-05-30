@@ -10,84 +10,11 @@ import numpy as np
 # Project-specific imports
 from config import settings
 from utils.logger import get_logger
+from utils.technical_analysis import find_fvg, find_swing_points # Centralized TA functions
 
 logger = get_logger(__name__)
 
-# --- Helper Functions for Unicorn Strategy ---
-def _find_fvg(data: pd.DataFrame, bar_index: int, direction: str = "bullish") -> tuple[float, float] | None:
-    """
-    Identifies a Fair Value Gap (FVG) based on a 3-bar pattern.
-    The FVG is identified based on the bars at indices: bar_index+1, bar_index+2, bar_index+3.
-    The FVG itself is the price range on bar_index+2, defined by the wicks of bar_index+1 and bar_index+3.
-
-    Args:
-        data (pd.DataFrame): OHLC price data.
-        bar_index (int): Index of the bar *before* the 3-bar pattern starts.
-                         So, pattern is data[bar_index+1], data[bar_index+2], data[bar_index+3].
-        direction (str): "bullish" or "bearish".
-
-    Returns:
-        tuple[float, float] | None: (FVG_low, FVG_high) or None if no FVG.
-                                     For bullish FVG: (bar1.High, bar3.Low)
-                                     For bearish FVG: (bar3.High, bar1.Low)
-    """
-    if bar_index + 3 >= len(data): # Need at least bar_index+1, bar_index+2, bar_index+3
-        return None
-    
-    bar1 = data.iloc[bar_index + 1] # First bar of the 3-bar pattern
-    bar2 = data.iloc[bar_index + 2] # Middle bar (where the gap is)
-    bar3 = data.iloc[bar_index + 3] # Third bar of the 3-bar pattern
-
-    if direction == "bullish":
-        # Bullish FVG: bar1.High < bar3.Low, and bar2 is a bullish candle (strong move)
-        if bar1['High'] < bar3['Low'] and bar2['Close'] > bar2['Open']:
-            return bar1['High'], bar3['Low'] # FVG is the space between bar1's high and bar3's low
-    elif direction == "bearish":
-        # Bearish FVG: bar1.Low > bar3.High, and bar2 is a bearish candle (strong move)
-        if bar1['Low'] > bar3['High'] and bar2['Close'] < bar2['Open']:
-            return bar3['High'], bar1['Low'] # FVG is the space between bar3's high and bar1's low
-    return None
-
-def _find_swing_points(data: pd.DataFrame, n: int = settings.UNICORN_SWING_LOOKBACK) -> pd.DataFrame:
-    """
-    Identifies swing highs and lows based on 'n' bars on each side.
-    A swing high is higher than 'n' bars to its left and 'n' bars to its right.
-    A swing low is lower than 'n' bars to its left and 'n' bars to its right.
-    This is a simple definition; more complex ones exist (e.g., fractal based).
-    """
-    data_copy = data.copy()
-    data_copy['SwingHigh'] = np.nan
-    data_copy['SwingLow'] = np.nan
-
-    # Iterate from n to len-n to allow lookback and lookforward
-    for i in range(n, len(data_copy) - n):
-        # Check for Swing High
-        is_swing_high = True
-        for j in range(1, n + 1):
-            if data_copy['High'].iloc[i] < data_copy['High'].iloc[i-j] or \
-               data_copy['High'].iloc[i] < data_copy['High'].iloc[i+j]:
-                is_swing_high = False
-                break
-        if is_swing_high:
-             # Additional check: current high must be strictly greater than immediate neighbors
-             # to avoid flat tops being marked multiple times if n=1.
-            if data_copy['High'].iloc[i] > data_copy['High'].iloc[i-1] and \
-               data_copy['High'].iloc[i] > data_copy['High'].iloc[i+1]:
-                data_copy.loc[data_copy.index[i], 'SwingHigh'] = data_copy['High'].iloc[i]
-
-        # Check for Swing Low
-        is_swing_low = True
-        for j in range(1, n + 1):
-            if data_copy['Low'].iloc[i] > data_copy['Low'].iloc[i-j] or \
-               data_copy['Low'].iloc[i] > data_copy['Low'].iloc[i+j]:
-                is_swing_low = False
-                break
-        if is_swing_low:
-            if data_copy['Low'].iloc[i] < data_copy['Low'].iloc[i-1] and \
-               data_copy['Low'].iloc[i] < data_copy['Low'].iloc[i+1]:
-                data_copy.loc[data_copy.index[i], 'SwingLow'] = data_copy['Low'].iloc[i]
-                
-    return data_copy
+# --- Helper functions _find_fvg and _find_swing_points are now imported from utils.technical_analysis ---
 
 def generate_unicorn_signals(
     data: pd.DataFrame,
@@ -101,89 +28,70 @@ def generate_unicorn_signals(
     Full Breaker + FVG overlap requires more complex pattern recognition.
     """
     signals_list = []
-    if len(data) < (settings.UNICORN_SWING_LOOKBACK * 2 + 5): # Need enough data for swings and FVG checks
-        logger.warning("Unicorn: Not enough data for signal generation.")
+    # Ensure enough data for swing point calculation (n bars on each side) and FVG (3 bars)
+    # Minimum data: (n*2 for swings) + (3 for FVG pattern) + (1 for current bar)
+    # If n = settings.UNICORN_SWING_LOOKBACK (e.g., 5), then 5*2 + 3 + 1 = 14 bars minimum.
+    # Let's use a slightly more conservative check.
+    if len(data) < (settings.UNICORN_SWING_LOOKBACK * 2 + 5):
+        logger.warning(f"Unicorn: Not enough data for signal generation. Need at least {settings.UNICORN_SWING_LOOKBACK * 2 + 5} bars, got {len(data)}.")
         return pd.DataFrame()
 
-    # Note: Full Unicorn logic would use `_find_swing_points` to identify breaker blocks.
+    # Note: Full Unicorn logic would use `find_swing_points` to identify breaker blocks.
     # The current simplified version focuses on FVG entries.
-    # data_with_swings = _find_swing_points(data.copy(), n=settings.UNICORN_SWING_LOOKBACK)
+    # data_with_swings = find_swing_points(data.copy(), n=settings.UNICORN_SWING_LOOKBACK)
 
     # Iterate through the data, allowing for FVG lookback.
     # If FVG is formed by bars (k-2, k-1, k), we check entry on bar k+1.
     # So, if current_bar is at index `i`, the FVG would have formed on bars (i-3, i-2, i-1).
-    for i in range(len(data)): # Iterate up to the second to last bar to allow FVG check on i-3, i-2, i-1
-        if i < 3: # Need at least 3 previous bars to check for an FVG ending at i-1
+    # `find_fvg` expects `bar_index` to be the bar *before* the 3-bar FVG pattern.
+    # So, to check an FVG formed by bars (i-3, i-2, i-1), `bar_index` for `find_fvg` should be `i-4`.
+    for i in range(len(data)):
+        if i < 3: # Need at least 3 previous bars (i-3, i-2, i-1) to check for an FVG, plus current bar (i) for entry.
+                  # So, i-4 must be >= 0. This means i must be >= 4.
             continue
 
         current_bar = data.iloc[i]
         current_bar_time = data.index[i]
+        
+        fvg_check_idx = i - 4 # Index of bar *before* the potential 3-bar FVG pattern (i-3, i-2, i-1)
+        if fvg_check_idx < 0: # Should be caught by the i < 3 check, but good for safety.
+            continue
 
         # Bullish FVG Entry (Simplified Unicorn)
-        # FVG formed by bars (i-3), (i-2), (i-1). Bar (i-2) is the one with the gap.
-        # FVG range is [(i-3).High, (i-1).Low]. We look for entry on current_bar (i).
-        bullish_fvg = _find_fvg(data, i - 3, "bullish") # Pass index of bar *before* 3-bar pattern
-        if bullish_fvg:
-            # For bullish FVG, _find_fvg returns (bar(i-2).High, bar(i).Low) if pattern is (i-2,i-1,i)
-            # If pattern is (i-3,i-2,i-1), then it's (bar(i-2).High, bar(i).Low)
-            # Corrected: if pattern is data[idx+1], data[idx+2], data[idx+3]
-            # For bullish: data[idx+1].High, data[idx+3].Low
-            # So, if _find_fvg(data, i-3, ...), pattern is data[i-2], data[i-1], data[i]
-            # and FVG is (data[i-2].High, data[i].Low) -- this seems off.
-            # Let's re-verify _find_fvg:
-            # bar1=data[idx+1], bar2=data[idx+2], bar3=data[idx+3]
-            # Bullish: bar1.High < bar3.Low. Returns (bar1.High, bar3.Low)
-            # So, if we call _find_fvg(data, i-3, ...):
-            # bar1=data[i-2], bar2=data[i-1], bar3=data[i]
-            # FVG is (data[i-2].High, data[i].Low)
-            # This means the FVG is formed by the candle at i-1, using wicks of i-2 and i.
-            # This is not standard. Standard FVG: 3 candles. candle1, candle2, candle3.
-            # Bullish FVG: candle1.high < candle3.low. FVG is the space.
-            # Let's assume _find_fvg is correct and it means FVG is between bar1.High and bar3.Low.
-            # If we want FVG formed by (i-3, i-2, i-1), then call _find_fvg(data, i-4, ...)
-            # Let's use the provided _find_fvg and assume its indexing logic.
-            # If we want to check an FVG that completed with bar `i-1`, formed by `i-3, i-2, i-1`.
-            # Then `bar_index` for `_find_fvg` should be `i-4`.
-            # `bar1 = data[i-3]`, `bar2 = data[i-2]`, `bar3 = data[i-1]`
-            # FVG is `(data[i-3].High, data[i-1].Low)`
-
-            fvg_check_idx = i - 4 # To check FVG formed by bars i-3, i-2, i-1
-            if fvg_check_idx < 0: continue
-            
-            bullish_fvg_details = _find_fvg(data, fvg_check_idx, "bullish")
-            if bullish_fvg_details:
-                fvg_b_low_boundary, fvg_b_high_boundary = bullish_fvg_details # (bar1.High, bar3.Low)
-                # Entry condition: current_bar (i) dips into the FVG and shows bullish reaction
-                if current_bar['Low'] <= fvg_b_high_boundary and \
-                   current_bar['Close'] > fvg_b_low_boundary and \
-                   current_bar['Close'] > current_bar['Open']: # Bullish close
-                    entry_price = current_bar['Close']
-                    sl_price = entry_price - stop_loss_points # Or below FVG low / structure
-                    tp_price = entry_price + (stop_loss_points * rrr)
-                    signals_list.append({
-                        'SignalTime': current_bar_time, 'SignalType': 'Long',
-                        'EntryPrice': entry_price, 'SL': sl_price, 'TP': tp_price,
-                        'Reason': f"Unicorn (Bullish FVG Entry): {fvg_b_low_boundary:.2f}-{fvg_b_high_boundary:.2f}"
-                    })
-                    logger.debug(f"Unicorn Long @ {current_bar_time}, FVG: {fvg_b_low_boundary:.2f}-{fvg_b_high_boundary:.2f}, Entry: {entry_price:.2f}")
-                    # Potentially break or add logic to avoid multiple signals for the same setup
+        bullish_fvg_details = find_fvg(data, fvg_check_idx, "bullish")
+        if bullish_fvg_details:
+            fvg_b_low_boundary, fvg_b_high_boundary = bullish_fvg_details # (bar1.High, bar3.Low)
+            # Entry condition: current_bar (i) dips into the FVG and shows bullish reaction
+            if current_bar['Low'] <= fvg_b_high_boundary and \
+               current_bar['Close'] > fvg_b_low_boundary and \
+               current_bar['Close'] > current_bar['Open']: # Bullish close
+                entry_price = current_bar['Close']
+                sl_price = entry_price - stop_loss_points
+                tp_price = entry_price + (stop_loss_points * rrr)
+                signals_list.append({
+                    'SignalTime': current_bar_time, 'SignalType': 'Long',
+                    'EntryPrice': entry_price, 'SL': sl_price, 'TP': tp_price,
+                    'Reason': f"Unicorn (Bullish FVG Entry): {fvg_b_low_boundary:.2f}-{fvg_b_high_boundary:.2f}"
+                })
+                logger.debug(f"Unicorn Long @ {current_bar_time}, FVG: {fvg_b_low_boundary:.2f}-{fvg_b_high_boundary:.2f}, Entry: {entry_price:.2f}")
+                # Potentially break or add logic to avoid multiple signals for the same setup if desired
 
         # Bearish FVG Entry (Simplified Unicorn)
-            bearish_fvg_details = _find_fvg(data, fvg_check_idx, "bearish")
-            if bearish_fvg_details:
-                fvg_s_low_boundary, fvg_s_high_boundary = bearish_fvg_details # (bar3.High, bar1.Low)
-                if current_bar['High'] >= fvg_s_low_boundary and \
-                   current_bar['Close'] < fvg_s_high_boundary and \
-                   current_bar['Close'] < current_bar['Open']: # Bearish close
-                    entry_price = current_bar['Close']
-                    sl_price = entry_price + stop_loss_points # Or above FVG high / structure
-                    tp_price = entry_price - (stop_loss_points * rrr)
-                    signals_list.append({
-                        'SignalTime': current_bar_time, 'SignalType': 'Short',
-                        'EntryPrice': entry_price, 'SL': sl_price, 'TP': tp_price,
-                        'Reason': f"Unicorn (Bearish FVG Entry): {fvg_s_low_boundary:.2f}-{fvg_s_high_boundary:.2f}"
-                    })
-                    logger.debug(f"Unicorn Short @ {current_bar_time}, FVG: {fvg_s_low_boundary:.2f}-{fvg_s_high_boundary:.2f}, Entry: {entry_price:.2f}")
+        bearish_fvg_details = find_fvg(data, fvg_check_idx, "bearish")
+        if bearish_fvg_details:
+            fvg_s_low_boundary, fvg_s_high_boundary = bearish_fvg_details # (bar3.High, bar1.Low)
+            if current_bar['High'] >= fvg_s_low_boundary and \
+               current_bar['Close'] < fvg_s_high_boundary and \
+               current_bar['Close'] < current_bar['Open']: # Bearish close
+                entry_price = current_bar['Close']
+                sl_price = entry_price + stop_loss_points
+                tp_price = entry_price - (stop_loss_points * rrr)
+                signals_list.append({
+                    'SignalTime': current_bar_time, 'SignalType': 'Short',
+                    'EntryPrice': entry_price, 'SL': sl_price, 'TP': tp_price,
+                    'Reason': f"Unicorn (Bearish FVG Entry): {fvg_s_low_boundary:.2f}-{fvg_s_high_boundary:.2f}"
+                })
+                logger.debug(f"Unicorn Short @ {current_bar_time}, FVG: {fvg_s_low_boundary:.2f}-{fvg_s_high_boundary:.2f}, Entry: {entry_price:.2f}")
 
     if not signals_list:
         logger.debug("Unicorn: No signals generated (using simplified FVG logic).")
