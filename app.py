@@ -62,18 +62,32 @@ st.set_page_config(
 def load_custom_css(css_file_path):
     """Loads custom CSS from a file and applies it."""
     try:
-        full_css_path = os.path.join(os.path.dirname(__file__), css_file_path)
+        # Try to construct path relative to app.py, common for Streamlit structure
+        app_dir = os.path.dirname(__file__)
+        # Assuming css_file_path is like "static/style.css"
+        # and app.py is at the root, so PROJECT_ROOT is app_dir.
+        # If app.py is in a subdir, this might need adjustment or absolute paths.
+        full_css_path = os.path.join(app_dir, css_file_path)
+
         if not os.path.exists(full_css_path):
-            full_css_path = css_file_path # Fallback
+            # Fallback for cases where css_file_path might be absolute or differently relative
+            logger.warning(f"CSS file not found at primary constructed path: {full_css_path}. Trying original path: {css_file_path}")
+            full_css_path = css_file_path 
+            if not os.path.exists(full_css_path): # Check fallback path too
+                 logger.error(f"CSS file still not found at fallback path: {full_css_path}. CSS will not be loaded.")
+                 return
+
 
         with open(full_css_path) as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
             logger.info(f"Successfully loaded CSS from: {full_css_path}")
-    except FileNotFoundError:
-        logger.warning(f"CSS file not found. Tried path: {full_css_path} and original path: {css_file_path}")
+    except FileNotFoundError: # This specific exception might not be hit if path check above is thorough
+        logger.error(f"CSS file not found. Attempted path: {full_css_path} (and possibly original: {css_file_path}).")
     except Exception as e:
-        logger.warning(f"Error loading CSS file '{css_file_path}': {e}")
+        logger.error(f"Error loading CSS file '{css_file_path}': {e}", exc_info=True)
 
+# Ensure this path is correct relative to where app.py is when executed
+# If app.py is at project root, and style.css is in "static/style.css"
 load_custom_css("static/style.css")
 
 
@@ -475,7 +489,7 @@ if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, k
 
             # --- Single Backtest Logic ---
             if analysis_mode_ui == "Single Backtest":
-                st.subheader(f"Single Backtest Run ({selected_strategy_name})")
+                # st.subheader(f"Single Backtest Run ({selected_strategy_name})") # Moved below
                 with st.spinner("Running single backtest..."):
                     try:
                         signals = strategy_engine.generate_signals(data=price_data_df.copy(), **strategy_params_for_engine)
@@ -532,7 +546,7 @@ if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, k
 
                 # --- Parameter Optimization (Full Period) ---
                 if analysis_mode_ui == "Parameter Optimization":
-                    st.subheader(f"Parameter Optimization ({opt_algo_ui} - {selected_strategy_name} - Full Period)")
+                    # st.subheader(f"Parameter Optimization ({opt_algo_ui} - {selected_strategy_name} - Full Period)") # Moved below
                     with st.spinner(f"Running {opt_algo_ui} optimization... This may take some time."):
                         try:
                             if opt_algo_ui == "Grid Search":
@@ -592,7 +606,7 @@ if st.sidebar.button("Run Analysis", type="primary", use_container_width=True, k
 
                 # --- Walk-Forward Optimization ---
                 elif analysis_mode_ui == "Walk-Forward Optimization":
-                    st.subheader(f"Walk-Forward Optimization Run ({opt_algo_ui} - {selected_strategy_name})")
+                    # st.subheader(f"Walk-Forward Optimization Run ({opt_algo_ui} - {selected_strategy_name})") # Moved below
                     wfo_parameters_for_run = {
                         'in_sample_days': st.session_state.wfo_isd_ui_val,
                         'out_of_sample_days': st.session_state.wfo_oosd_ui_val,
@@ -662,15 +676,25 @@ if main_tabs_to_display_names:
                 strat_display_info = run_params_info.get("Strategy", "N/A")
                 symbol_display_info = run_params_info.get("Symbol", selected_ticker_name)
 
-                param_info_header = f" (Strategy: {strat_display_info} | Symbol: {symbol_display_info} | Source: {run_source_info} | TF: {tf_display_info}"
+                # Updated Performance Summary Header
+                st.subheader("Performance Summary")
+                
+                summary_details_md = f"""
+                <div class='performance-summary-details'>
+                    <span class='summary-parameter-detail'>**Strategy:** {strat_display_info}</span>
+                    <span class='summary-parameter-detail'>**Symbol:** {symbol_display_info}</span>
+                    <span class='summary-parameter-detail'>**Source:** {run_source_info}</span>
+                    <span class='summary-parameter-detail'>**Timeframe:** {tf_display_info}</span>
+                """
                 entry_display_val_info = run_params_info.get("EntryDisplay", "")
                 if entry_display_val_info:
-                    param_info_header += f" | {entry_display_val_info}"
-                elif run_params_info.get("SL") is not None and run_params_info.get("RRR") is not None: # Fallback if EntryDisplay is missing
-                    param_info_header += f" | SL: {float(run_params_info.get('SL')):.2f}, RRR: {float(run_params_info.get('RRR')):.1f}"
-                param_info_header += ")"
-                
-                st.markdown(f"#### Performance Summary{param_info_header}")
+                    summary_details_md += f"<span class='summary-parameter-detail'>**Parameters:** {entry_display_val_info}</span>"
+                elif run_params_info.get("SL") is not None and run_params_info.get("RRR") is not None:
+                    summary_details_md += f"<span class='summary-parameter-detail'>**Parameters:** SL: {float(run_params_info.get('SL')):.2f}, RRR: {float(run_params_info.get('RRR')):.1f}</span>"
+                summary_details_md += "</div>"
+                st.markdown(summary_details_md, unsafe_allow_html=True)
+                st.markdown("---") # Visual separator
+
 
                 # Metric display function
                 POSITIVE_COLOR, NEGATIVE_COLOR, NEUTRAL_COLOR = settings.POSITIVE_METRIC_COLOR, settings.NEGATIVE_METRIC_COLOR, settings.NEUTRAL_METRIC_COLOR
@@ -682,16 +706,19 @@ if main_tabs_to_display_names:
 
                 def display_styled_metric_card(column, label, value_raw, is_currency=True, is_percentage=False, precision=2, profit_factor_logic=False, mdd_logic=False):
                     formatted_value = format_metric_value(value_raw, precision, is_currency, is_percentage)
-                    # For dark theme, Streamlit handles text color. We only apply specific P&L colors.
-                    color_style_str = "" # Default: no specific color override
+                    color_style_str = "" 
                     
                     if not (pd.isna(value_raw) or value_raw is None):
                         if profit_factor_logic: 
                             if value_raw > 1: color_style_str = f"color: {POSITIVE_COLOR};"
                             elif value_raw < 1 and value_raw != 0 : color_style_str = f"color: {NEGATIVE_COLOR};"
                         elif mdd_logic: 
-                            if value_raw < 0: color_style_str = f"color: {NEGATIVE_COLOR};"
-                        else: 
+                            if value_raw < 0: color_style_str = f"color: {NEGATIVE_COLOR};" # MDD is typically negative
+                            elif value_raw == 0: color_style_str = f"color: {NEUTRAL_COLOR};" # Or positive if it's a gain (unlikely for MDD)
+                            else: color_style_str = f"color: {POSITIVE_COLOR};"
+
+
+                        else: # General P&L or win rate like metrics
                             if value_raw > 0: color_style_str = f"color: {POSITIVE_COLOR};"
                             elif value_raw < 0: color_style_str = f"color: {NEGATIVE_COLOR};"
                     
@@ -708,7 +735,7 @@ if main_tabs_to_display_names:
                     display_styled_metric_card(col1_metrics, "Max Drawdown", performance_summary.get('Max Drawdown (%)'), is_currency=False, is_percentage=True, mdd_logic=True)
                 with col2_metrics:
                     display_styled_metric_card(col2_metrics, "Total Trades", int(performance_summary.get('Total Trades', 0)), is_currency=False, is_percentage=False)
-                    display_styled_metric_card(col2_metrics, "Win Rate", performance_summary.get('Win Rate', 0), is_currency=False, is_percentage=True)
+                    display_styled_metric_card(col2_metrics, "Win Rate", performance_summary.get('Win Rate', 0), is_currency=False, is_percentage=True) # Win rate is positive if > 50, but color by value itself
                     display_styled_metric_card(col2_metrics, "Profit Factor", performance_summary.get('Profit Factor', 0), is_currency=False, precision=2, profit_factor_logic=True)
                 with col3_metrics:
                     display_styled_metric_card(col3_metrics, "Avg. Trade P&L", performance_summary.get('Average Trade P&L'), is_currency=True)
@@ -772,7 +799,8 @@ if main_tabs_to_display_names:
         with tab_map["⚙️ Optimization Results (Full Period)"]:
             opt_df_to_display = st.session_state.optimization_results_df
             if not opt_df_to_display.empty:
-                st.markdown(f"#### Optimization Results Table ({selected_strategy_name} - Full Period - {opt_algo_ui})")
+                st.subheader(f"Optimization Results ({selected_strategy_name} - Full Period - {opt_algo_ui})")
+                # st.markdown(f"#### Optimization Results Table ({selected_strategy_name} - Full Period - {opt_algo_ui})") # Replaced by subheader
                 float_cols_opt_table = [col for col in opt_df_to_display.columns if opt_df_to_display[col].dtype == 'float64']
                 st.dataframe(opt_df_to_display.style.format({col: '{:.2f}' for col in float_cols_opt_table}), height=400, use_container_width=True)
                 try:
@@ -783,7 +811,7 @@ if main_tabs_to_display_names:
                     st.warning("Could not prepare optimization results for download.")
 
                 if opt_algo_ui == "Grid Search" and 'SL Points' in opt_df_to_display.columns and 'RRR' in opt_df_to_display.columns:
-                    st.markdown(f"#### Optimization Heatmap: {opt_metric_ui} (SL vs RRR - Full Period)")
+                    st.markdown(f"##### Optimization Heatmap: {opt_metric_ui} (SL vs RRR - Full Period)")
                     try:
                         heatmap_fig = plotting.plot_optimization_heatmap(opt_df_to_display, 'SL Points', 'RRR', opt_metric_ui)
                         st.plotly_chart(heatmap_fig, use_container_width=True)
@@ -805,7 +833,8 @@ if main_tabs_to_display_names:
                 wfo_log_df_display = wfo_results_display.get("log", pd.DataFrame())
                 wfo_oos_trades_df_display = wfo_results_display.get("oos_trades", pd.DataFrame())
 
-                st.markdown(f"#### Walk-Forward Optimization Log ({selected_strategy_name} - {opt_algo_ui} for inner optimization)")
+                st.subheader(f"Walk-Forward Optimization Log ({selected_strategy_name} - {opt_algo_ui} for inner optimization)")
+                # st.markdown(f"#### Walk-Forward Optimization Log ({selected_strategy_name} - {opt_algo_ui} for inner optimization)") # Replaced by subheader
                 if not wfo_log_df_display.empty:
                     float_cols_wfo_log = [col for col in wfo_log_df_display.columns if wfo_log_df_display[col].dtype == 'float64']
                     st.dataframe(wfo_log_df_display.style.format({col: '{:.2f}' for col in float_cols_wfo_log}), height=300, use_container_width=True)
@@ -818,7 +847,7 @@ if main_tabs_to_display_names:
                 else:
                     st.info("WFO log is empty.")
 
-                st.markdown("#### Aggregated Out-of-Sample (OOS) Trades from WFO")
+                st.markdown("##### Aggregated Out-of-Sample (OOS) Trades from WFO")
                 if not wfo_oos_trades_df_display.empty:
                     st.dataframe(wfo_oos_trades_df_display.style.format({col: '{:.2f}' for col in wfo_oos_trades_df_display.select_dtypes(include='float').columns}), height=300, use_container_width=True)
                     try:
