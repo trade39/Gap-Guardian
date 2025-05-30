@@ -1,13 +1,13 @@
 # ui/sidebar.py
 """
-Handles rendering of the Streamlit sidebar inputs and controls.
+Handles rendering of the Streamlit sidebar inputs and controls with improved organization.
 """
 import streamlit as st
 from datetime import date, timedelta, time as dt_time
 import numpy as np
-from config import settings # Assuming settings.py is in a 'config' directory accessible via sys.path
+from config import settings
 
-# Strategy Explanations - Moved here as it's related to strategy selection in sidebar
+# Strategy Explanations - Kept here as it's related to strategy selection in sidebar
 STRATEGY_EXPLANATIONS = {
     "Gap Guardian": """
     **Concept:** Aims to capitalize on false breakouts/breakdowns of an initial opening range during a specific morning session.
@@ -79,121 +79,116 @@ STRATEGY_EXPLANATIONS = {
 
 def render_sidebar():
     """Renders all sidebar inputs and returns their current values and a run trigger."""
-    st.sidebar.header("Backtest Configuration")
+    st.sidebar.header("⚙️ Backtest Configuration")
 
-    # Strategy Selector
-    selected_strategy_name = st.sidebar.selectbox(
-        "Select Strategy:",
-        options=settings.AVAILABLE_STRATEGIES,
-        index=settings.AVAILABLE_STRATEGIES.index(st.session_state.selected_strategy),
-        key="strategy_selector_sidebar_v1"
-    )
-    st.session_state.selected_strategy = selected_strategy_name # Persist selection
+    # --- Section 1: Core Setup ---
+    with st.sidebar.expander("📊 Core Setup", expanded=True):
+        selected_strategy_name = st.selectbox(
+            "Select Strategy:",
+            options=settings.AVAILABLE_STRATEGIES,
+            index=settings.AVAILABLE_STRATEGIES.index(st.session_state.selected_strategy),
+            key="strategy_selector_sidebar_v2"
+        )
+        st.session_state.selected_strategy = selected_strategy_name
 
-    # Ticker Selector
-    selected_ticker_name = st.sidebar.selectbox(
-        "Select Symbol:",
-        options=list(settings.DEFAULT_TICKERS.keys()),
-        index=0,
-        key="ticker_sel_sidebar_v1"
-    )
-    ticker_symbol = settings.DEFAULT_TICKERS[selected_ticker_name]
+        selected_ticker_name = st.selectbox(
+            "Select Symbol:",
+            options=list(settings.DEFAULT_TICKERS.keys()),
+            index=0, # Default to first ticker
+            key="ticker_sel_sidebar_v2"
+        )
+        ticker_symbol = settings.DEFAULT_TICKERS[selected_ticker_name]
 
-    # Timeframe Selector
-    current_tf_value_in_state = st.session_state.selected_timeframe_value
-    default_tf_display_index = 0
-    if current_tf_value_in_state in settings.AVAILABLE_TIMEFRAMES.values():
-        default_tf_display_index = list(settings.AVAILABLE_TIMEFRAMES.values()).index(current_tf_value_in_state)
+        current_tf_value_in_state = st.session_state.selected_timeframe_value
+        default_tf_display_index = 0
+        if current_tf_value_in_state in settings.AVAILABLE_TIMEFRAMES.values():
+            default_tf_display_index = list(settings.AVAILABLE_TIMEFRAMES.values()).index(current_tf_value_in_state)
+        selected_timeframe_display = st.selectbox(
+            "Select Timeframe:",
+            options=list(settings.AVAILABLE_TIMEFRAMES.keys()),
+            index=default_tf_display_index,
+            key="timeframe_selector_sidebar_v2"
+        )
+        st.session_state.selected_timeframe_value = settings.AVAILABLE_TIMEFRAMES[selected_timeframe_display]
+        ui_current_interval = st.session_state.selected_timeframe_value
 
-    selected_timeframe_display = st.sidebar.selectbox(
-        "Select Timeframe:",
-        options=list(settings.AVAILABLE_TIMEFRAMES.keys()),
-        index=default_tf_display_index,
-        key="timeframe_selector_sidebar_v1"
-    )
-    st.session_state.selected_timeframe_value = settings.AVAILABLE_TIMEFRAMES[selected_timeframe_display]
-    ui_current_interval = st.session_state.selected_timeframe_value
+        today = date.today()
+        max_history_limit_days = None
+        if ui_current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS:
+            max_history_limit_days = settings.MAX_SHORT_INTRADAY_DAYS
+        elif ui_current_interval in settings.YFINANCE_HOURLY_INTERVALS:
+            max_history_limit_days = settings.MAX_HOURLY_INTRADAY_DAYS
+        min_allowable_start_date_for_ui = (today - timedelta(days=max_history_limit_days - 1)) if max_history_limit_days else (today - timedelta(days=365 * 10))
+        date_input_help_suffix = f"Data for {ui_current_interval} is limited to ~{max_history_limit_days} days." if max_history_limit_days else "Select historical period."
 
-    # Date Range Inputs
-    today = date.today()
-    max_history_limit_days = None
-    if ui_current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS:
-        max_history_limit_days = settings.MAX_SHORT_INTRADAY_DAYS
-    elif ui_current_interval in settings.YFINANCE_HOURLY_INTERVALS:
-        max_history_limit_days = settings.MAX_HOURLY_INTRADAY_DAYS
+        if ui_current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS + settings.YFINANCE_HOURLY_INTERVALS:
+            default_start_days_ago = min(settings.MAX_SHORT_INTRADAY_DAYS - 5 if settings.MAX_SHORT_INTRADAY_DAYS else 15,
+                                         max_history_limit_days - 1 if max_history_limit_days else 15)
+        else:
+            default_start_days_ago = 365 if ui_current_interval != "1wk" else 30*7
+        default_start_date_value = today - timedelta(days=default_start_days_ago)
+        if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
+        max_possible_start_date = today - timedelta(days=1)
+        if default_start_date_value > max_possible_start_date: default_start_date_value = max_possible_start_date
+        if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
 
-    min_allowable_start_date_for_ui = (today - timedelta(days=max_history_limit_days - 1)) if max_history_limit_days else (today - timedelta(days=365 * 10))
-    date_input_help_suffix = f"Data for {ui_current_interval} is limited to ~{max_history_limit_days} days." if max_history_limit_days else "Select historical period."
+        start_date_ui = st.date_input(
+            "Start Date:", value=default_start_date_value, min_value=min_allowable_start_date_for_ui,
+            max_value=max_possible_start_date, key=f"start_date_sidebar_{ui_current_interval}_v2",
+            help=f"Start date for historical data. {date_input_help_suffix}"
+        )
+        min_end_date_value_ui = start_date_ui + timedelta(days=1) if start_date_ui else min_allowable_start_date_for_ui + timedelta(days=1)
+        default_end_date_value_ui = today
+        if default_end_date_value_ui < min_end_date_value_ui: default_end_date_value_ui = min_end_date_value_ui
+        if default_end_date_value_ui > today: default_end_date_value_ui = today
+        end_date_ui = st.date_input(
+            "End Date:", value=default_end_date_value_ui, min_value=min_end_date_value_ui,
+            max_value=today, key=f"end_date_sidebar_{ui_current_interval}_v2",
+            help=f"End date for historical data. {date_input_help_suffix}"
+        )
 
-    if ui_current_interval in settings.YFINANCE_SHORT_INTRADAY_INTERVALS + settings.YFINANCE_HOURLY_INTERVALS:
-        default_start_days_ago = min(settings.MAX_SHORT_INTRADAY_DAYS - 5 if settings.MAX_SHORT_INTRADAY_DAYS else 15,
-                                     max_history_limit_days - 1 if max_history_limit_days else 15)
-    else:
-        default_start_days_ago = 365 if ui_current_interval != "1wk" else 30*7
+    # --- Section 2: Financial Parameters ---
+    with st.sidebar.expander("💰 Financial Parameters", expanded=True):
+        initial_capital_ui = st.number_input("Initial Capital ($):", min_value=1000.0, value=settings.DEFAULT_INITIAL_CAPITAL, step=1000.0, format="%.2f", key="ic_sidebar_v2")
+        risk_per_trade_percent_ui = st.number_input("Risk per Trade (%):", min_value=0.1, max_value=10.0, value=settings.DEFAULT_RISK_PER_TRADE_PERCENT, step=0.1, format="%.1f", key="rpt_sidebar_v2")
 
-    default_start_date_value = today - timedelta(days=default_start_days_ago)
-    if default_start_date_value < min_allowable_start_date_for_ui:
-        default_start_date_value = min_allowable_start_date_for_ui
-    max_possible_start_date = today - timedelta(days=1)
-    if default_start_date_value > max_possible_start_date:
-        default_start_date_value = max_possible_start_date
-    if default_start_date_value < min_allowable_start_date_for_ui:
-         default_start_date_value = min_allowable_start_date_for_ui
-
-    start_date_ui = st.sidebar.date_input(
-        "Start Date:", value=default_start_date_value, min_value=min_allowable_start_date_for_ui,
-        max_value=max_possible_start_date, key=f"start_date_sidebar_{ui_current_interval}_v1",
-        help=f"Start date for historical data. {date_input_help_suffix}"
-    )
-
-    min_end_date_value_ui = start_date_ui + timedelta(days=1) if start_date_ui else min_allowable_start_date_for_ui + timedelta(days=1)
-    default_end_date_value_ui = today
-    if default_end_date_value_ui < min_end_date_value_ui: default_end_date_value_ui = min_end_date_value_ui
-    if default_end_date_value_ui > today: default_end_date_value_ui = today
-
-    end_date_ui = st.sidebar.date_input(
-        "End Date:", value=default_end_date_value_ui, min_value=min_end_date_value_ui,
-        max_value=today, key=f"end_date_sidebar_{ui_current_interval}_v1",
-        help=f"End date for historical data. {date_input_help_suffix}"
-    )
-
-    # Financial Parameters
-    initial_capital_ui = st.sidebar.number_input("Initial Capital ($):", min_value=1000.0, value=settings.DEFAULT_INITIAL_CAPITAL, step=1000.0, format="%.2f", key="ic_sidebar_v1")
-    risk_per_trade_percent_ui = st.sidebar.number_input("Risk per Trade (%):", min_value=0.1, max_value=10.0, value=settings.DEFAULT_RISK_PER_TRADE_PERCENT, step=0.1, format="%.1f", key="rpt_sidebar_v1")
-
-    # Common Strategy Parameters (Manual Run)
-    st.sidebar.subheader("Common Strategy Parameters")
-    sl_points_single_ui = st.sidebar.number_input("SL (points):", min_value=0.1, value=settings.DEFAULT_STOP_LOSS_POINTS, step=0.1, format="%.2f", key="sl_s_man_sidebar_v1")
-    rrr_single_ui = st.sidebar.number_input("RRR:", min_value=0.1, value=settings.DEFAULT_RRR, step=0.1, format="%.1f", key="rrr_s_man_sidebar_v1")
-
-    # Strategy-Specific Parameters (Manual Run)
-    entry_start_hour_single_ui = settings.DEFAULT_ENTRY_WINDOW_START_HOUR
-    entry_start_minute_single_ui = settings.DEFAULT_ENTRY_WINDOW_START_MINUTE
-    entry_end_hour_single_ui = settings.DEFAULT_ENTRY_WINDOW_END_HOUR
-    entry_end_minute_single_ui = settings.DEFAULT_ENTRY_WINDOW_END_MINUTE
-
-    if selected_strategy_name == "Gap Guardian":
-        st.sidebar.markdown("**Entry Window (NY Time - Manual Run):**")
-        col1_entry, col2_entry = st.sidebar.columns(2)
-        entry_start_hour_single_ui = col1_entry.number_input("Start Hr", 0, 23, settings.DEFAULT_ENTRY_WINDOW_START_HOUR, 1, key="esh_s_man_sidebar_v1")
-        entry_start_minute_single_ui = col2_entry.number_input("Start Min", 0, 59, settings.DEFAULT_ENTRY_WINDOW_START_MINUTE, 15, key="esm_s_man_sidebar_v1")
-        col1_exit, col2_exit = st.sidebar.columns(2)
-        entry_end_hour_single_ui = col1_exit.number_input("End Hr", 0, 23, settings.DEFAULT_ENTRY_WINDOW_END_HOUR, 1, key="eeh_s_man_sidebar_v1")
-        entry_end_minute_single_ui = col2_exit.number_input("End Min", 0, 59, settings.DEFAULT_ENTRY_WINDOW_END_MINUTE, 15, key="eem_s_man_sidebar_v1", help="Usually 00 for end of hour.")
-    elif selected_strategy_name == "Unicorn":
-        st.sidebar.caption("Unicorn strategy uses SL/RRR. Entry is pattern-based (Breaker + FVG).")
-    elif selected_strategy_name == "Silver Bullet":
-        st.sidebar.caption(f"Silver Bullet uses SL/RRR. Entry is FVG-based within fixed NY time windows: "
-                           f"{', '.join([f'{s.strftime('%H:%M')}-{e.strftime('%H:%M')}' for s, e in settings.SILVER_BULLET_WINDOWS_NY])}.")
-
-    # Analysis Mode Selector
+    # --- Section 3: Analysis Mode ---
     analysis_mode_ui = st.sidebar.radio(
-        "Analysis Type:",
+        "🔬 Analysis Type:",
         ("Single Backtest", "Parameter Optimization", "Walk-Forward Optimization"),
-        index=0, key="analysis_mode_sidebar_v1"
+        index=0, key="analysis_mode_sidebar_v2",
+        horizontal=True # Make radio buttons horizontal if space allows and looks good
     )
+    st.sidebar.markdown("---") # Visual separator
 
-    # Optimization Parameters
+    # --- Section 4: Manual Run Parameters (Conditional) ---
+    # This expander is more relevant for "Single Backtest" but parameters are used as defaults for opt/WFO too.
+    # We can make it expanded by default if Single Backtest is chosen.
+    manual_run_expanded = True if analysis_mode_ui == "Single Backtest" else False
+    with st.sidebar.expander("🎯 Manual Run & Base Parameters", expanded=manual_run_expanded):
+        st.caption("Parameters for a single backtest run, or base values if not optimized.")
+        sl_points_single_ui = st.number_input("Stop Loss (points):", min_value=0.1, value=settings.DEFAULT_STOP_LOSS_POINTS, step=0.1, format="%.2f", key="sl_s_man_sidebar_v2")
+        rrr_single_ui = st.number_input("Risk/Reward Ratio (RRR):", min_value=0.1, value=settings.DEFAULT_RRR, step=0.1, format="%.1f", key="rrr_s_man_sidebar_v2")
+
+        entry_start_hour_single_ui = settings.DEFAULT_ENTRY_WINDOW_START_HOUR
+        entry_start_minute_single_ui = settings.DEFAULT_ENTRY_WINDOW_START_MINUTE
+        entry_end_hour_single_ui = settings.DEFAULT_ENTRY_WINDOW_END_HOUR
+        entry_end_minute_single_ui = settings.DEFAULT_ENTRY_WINDOW_END_MINUTE
+
+        if selected_strategy_name == "Gap Guardian":
+            st.markdown("**Entry Window (NY Time):**")
+            col1_entry, col2_entry = st.columns(2)
+            entry_start_hour_single_ui = col1_entry.number_input("Start Hr", 0, 23, settings.DEFAULT_ENTRY_WINDOW_START_HOUR, 1, key="esh_s_man_sidebar_v2")
+            entry_start_minute_single_ui = col2_entry.number_input("Start Min", 0, 59, settings.DEFAULT_ENTRY_WINDOW_START_MINUTE, 15, key="esm_s_man_sidebar_v2")
+            col1_exit, col2_exit = st.columns(2)
+            entry_end_hour_single_ui = col1_exit.number_input("End Hr", 0, 23, settings.DEFAULT_ENTRY_WINDOW_END_HOUR, 1, key="eeh_s_man_sidebar_v2")
+            entry_end_minute_single_ui = col2_exit.number_input("End Min", 0, 59, settings.DEFAULT_ENTRY_WINDOW_END_MINUTE, 15, key="eem_s_man_sidebar_v2", help="Usually 00 for end of hour.")
+        elif selected_strategy_name == "Unicorn":
+            st.caption("Unicorn: SL/RRR used. Entry is pattern-based.")
+        elif selected_strategy_name == "Silver Bullet":
+            st.caption(f"Silver Bullet: SL/RRR used. Fixed NY time windows: {', '.join([f'{s.strftime('%H:%M')}-{e.strftime('%H:%M')}' for s, e in settings.SILVER_BULLET_WINDOWS_NY])}.")
+
+    # --- Section 5: Optimization Settings (Conditional) ---
     opt_algo_ui = settings.DEFAULT_OPTIMIZATION_ALGORITHM
     sl_min_opt_ui, sl_max_opt_ui, sl_steps_opt_ui = settings.DEFAULT_SL_POINTS_OPTIMIZATION_RANGE.values()
     rrr_min_opt_ui, rrr_max_opt_ui, rrr_steps_opt_ui = settings.DEFAULT_RRR_OPTIMIZATION_RANGE.values()
@@ -203,90 +198,90 @@ def render_sidebar():
     rand_iters_ui = settings.DEFAULT_RANDOM_SEARCH_ITERATIONS
     opt_metric_ui = settings.DEFAULT_OPTIMIZATION_METRIC
 
-    if analysis_mode_ui != "Single Backtest":
-        st.sidebar.markdown("##### In-Sample Optimization Settings")
-        opt_algo_ui = st.sidebar.selectbox("Algorithm:", settings.OPTIMIZATION_ALGORITHMS, index=settings.OPTIMIZATION_ALGORITHMS.index(opt_algo_ui), key="opt_algo_sidebar_v1")
-        opt_metric_ui = st.sidebar.selectbox("Optimize Metric:", settings.OPTIMIZATION_METRICS, index=settings.OPTIMIZATION_METRICS.index(opt_metric_ui), key="opt_metric_sidebar_v1")
-        
-        st.sidebar.markdown("**SL Range (points):**")
-        c1,c2,c3 = st.sidebar.columns(3)
-        sl_min_opt_ui = c1.number_input("Min", value=sl_min_opt_ui, step=0.1, format="%.1f", key="slmin_o_sidebar_v1", min_value=0.1)
-        sl_max_opt_ui = c2.number_input("Max", value=sl_max_opt_ui, step=0.1, format="%.1f", key="slmax_o_sidebar_v1", min_value=sl_min_opt_ui + 0.1)
-        if opt_algo_ui == "Grid Search":
-            sl_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(sl_steps_opt_ui), step=1, key="slsteps_o_sidebar_v1")
-        
-        st.sidebar.markdown("**RRR Range:**")
-        c1,c2,c3 = st.sidebar.columns(3)
-        rrr_min_opt_ui = c1.number_input("Min", value=rrr_min_opt_ui, step=0.1, format="%.1f", key="rrrmin_o_sidebar_v1", min_value=0.1)
-        rrr_max_opt_ui = c2.number_input("Max", value=rrr_max_opt_ui, step=0.1, format="%.1f", key="rrrmax_o_sidebar_v1", min_value=rrr_min_opt_ui + 0.1)
-        if opt_algo_ui == "Grid Search":
-            rrr_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(rrr_steps_opt_ui), step=1, key="rrrsteps_o_sidebar_v1")
-
-        if selected_strategy_name == "Gap Guardian":
-            st.sidebar.markdown("**Entry Start Hr Range (NY):**")
-            c1,c2,c3 = st.sidebar.columns(3)
-            esh_min_opt_ui = c1.number_input("Min Hr", value=esh_min_opt_ui, min_value=0, max_value=23, step=1, key="eshmin_o_sidebar_v1")
-            esh_max_opt_ui = c2.number_input("Max Hr", value=esh_max_opt_ui, min_value=esh_min_opt_ui, max_value=23, step=1, key="eshmax_o_sidebar_v1")
-            if opt_algo_ui == "Grid Search":
-                esh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(esh_steps_opt_ui), step=1, key="eshsteps_o_sidebar_v1")
+    if analysis_mode_ui in ["Parameter Optimization", "Walk-Forward Optimization"]:
+        with st.sidebar.expander("🛠️ In-Sample Optimization Settings", expanded=True):
+            opt_algo_ui = st.selectbox("Algorithm:", settings.OPTIMIZATION_ALGORITHMS, index=settings.OPTIMIZATION_ALGORITHMS.index(opt_algo_ui), key="opt_algo_sidebar_v2")
+            opt_metric_ui = st.selectbox("Optimize Metric:", settings.OPTIMIZATION_METRICS, index=settings.OPTIMIZATION_METRICS.index(opt_metric_ui), key="opt_metric_sidebar_v2")
             
-            esm_vals_opt_ui = st.sidebar.multiselect("Entry Start Min(s) (NY):", [0,15,30,45,50], default=esm_vals_opt_ui, key="esmvals_o_sidebar_v1")
-            if not esm_vals_opt_ui: esm_vals_opt_ui = [settings.DEFAULT_ENTRY_WINDOW_START_MINUTE]
-
-            st.sidebar.markdown("**Entry End Hr Range (NY):**")
-            c1,c2,c3 = st.sidebar.columns(3)
-            eeh_min_opt_ui = c1.number_input("Min Hr", value=eeh_min_opt_ui, min_value=0, max_value=23, step=1, key="eehmin_o_sidebar_v1")
-            eeh_max_opt_ui = c2.number_input("Max Hr", value=eeh_max_opt_ui, min_value=eeh_min_opt_ui, max_value=23, step=1, key="eehmax_o_sidebar_v1")
+            st.markdown("**SL Range (points):**")
+            c1,c2,c3 = st.columns(3)
+            sl_min_opt_ui = c1.number_input("Min", value=sl_min_opt_ui, step=0.1, format="%.1f", key="slmin_o_sidebar_v2", min_value=0.1)
+            sl_max_opt_ui = c2.number_input("Max", value=sl_max_opt_ui, step=0.1, format="%.1f", key="slmax_o_sidebar_v2", min_value=sl_min_opt_ui + 0.1)
             if opt_algo_ui == "Grid Search":
-                eeh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(eeh_steps_opt_ui), step=1, key="eehsteps_o_sidebar_v1")
-        
-        if opt_algo_ui == "Random Search":
-            rand_iters_ui = st.sidebar.number_input("Random Iterations:", min_value=10, max_value=1000, value=rand_iters_ui, step=10, key="randiter_o_sidebar_v1")
-        
-        if opt_algo_ui == "Grid Search":
-            grid_combs = int(sl_steps_opt_ui * rrr_steps_opt_ui)
-            if selected_strategy_name == "Gap Guardian":
-                grid_combs *= int(esh_steps_opt_ui * len(esm_vals_opt_ui) * eeh_steps_opt_ui)
-            st.sidebar.caption(f"Estimated Grid Combinations: {grid_combs}")
-        else:
-            st.sidebar.caption(f"Random Iterations: {rand_iters_ui}")
+                sl_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(sl_steps_opt_ui), step=1, key="slsteps_o_sidebar_v2")
+            
+            st.markdown("**RRR Range:**")
+            c1,c2,c3 = st.columns(3)
+            rrr_min_opt_ui = c1.number_input("Min", value=rrr_min_opt_ui, step=0.1, format="%.1f", key="rrrmin_o_sidebar_v2", min_value=0.1)
+            rrr_max_opt_ui = c2.number_input("Max", value=rrr_max_opt_ui, step=0.1, format="%.1f", key="rrrmax_o_sidebar_v2", min_value=rrr_min_opt_ui + 0.1)
+            if opt_algo_ui == "Grid Search":
+                rrr_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(rrr_steps_opt_ui), step=1, key="rrrsteps_o_sidebar_v2")
 
-    # WFO Parameters
+            if selected_strategy_name == "Gap Guardian":
+                st.markdown("**Entry Start Hr Range (NY):**")
+                c1,c2,c3 = st.columns(3)
+                esh_min_opt_ui = c1.number_input("Min Hr", value=esh_min_opt_ui, min_value=0, max_value=23, step=1, key="eshmin_o_sidebar_v2")
+                esh_max_opt_ui = c2.number_input("Max Hr", value=esh_max_opt_ui, min_value=esh_min_opt_ui, max_value=23, step=1, key="eshmax_o_sidebar_v2")
+                if opt_algo_ui == "Grid Search":
+                    esh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(esh_steps_opt_ui), step=1, key="eshsteps_o_sidebar_v2")
+                
+                esm_vals_opt_ui = st.multiselect("Entry Start Min(s) (NY):", [0,15,30,45,50], default=esm_vals_opt_ui, key="esmvals_o_sidebar_v2")
+                if not esm_vals_opt_ui: esm_vals_opt_ui = [settings.DEFAULT_ENTRY_WINDOW_START_MINUTE]
+
+                st.markdown("**Entry End Hr Range (NY):**")
+                c1,c2,c3 = st.columns(3)
+                eeh_min_opt_ui = c1.number_input("Min Hr", value=eeh_min_opt_ui, min_value=0, max_value=23, step=1, key="eehmin_o_sidebar_v2")
+                eeh_max_opt_ui = c2.number_input("Max Hr", value=eeh_max_opt_ui, min_value=eeh_min_opt_ui, max_value=23, step=1, key="eehmax_o_sidebar_v2")
+                if opt_algo_ui == "Grid Search":
+                    eeh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(eeh_steps_opt_ui), step=1, key="eehsteps_o_sidebar_v2")
+            
+            if opt_algo_ui == "Random Search":
+                rand_iters_ui = st.number_input("Random Iterations:", min_value=10, max_value=1000, value=rand_iters_ui, step=10, key="randiter_o_sidebar_v2")
+            
+            if opt_algo_ui == "Grid Search":
+                grid_combs = int(sl_steps_opt_ui * rrr_steps_opt_ui)
+                if selected_strategy_name == "Gap Guardian":
+                    grid_combs *= int(esh_steps_opt_ui * len(esm_vals_opt_ui) * eeh_steps_opt_ui) # Ensure eeh_steps_opt_ui is int
+                st.caption(f"Estimated Grid Combinations: {grid_combs}")
+            else:
+                st.caption(f"Random Iterations: {rand_iters_ui}")
+
+    # --- Section 6: WFO Settings (Conditional) ---
     wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui = st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val
     if analysis_mode_ui == "Walk-Forward Optimization":
-        st.sidebar.markdown("##### WFO Settings (Calendar Days)")
-        total_available_days_for_wfo = (end_date_ui - start_date_ui).days + 1
-        MIN_WFO_IS_DAYS, MIN_WFO_OOS_DAYS, MIN_WFO_STEP_DAYS = 30, 10, 10
+        with st.sidebar.expander("🚶 Walk-Forward Settings (Calendar Days)", expanded=True):
+            total_available_days_for_wfo = (end_date_ui - start_date_ui).days + 1
+            MIN_WFO_IS_DAYS, MIN_WFO_OOS_DAYS, MIN_WFO_STEP_DAYS = 30, 10, 10
 
-        calculated_isd, calculated_oosd, calculated_stepd = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
-        if total_available_days_for_wfo >= MIN_WFO_IS_DAYS + MIN_WFO_OOS_DAYS:
-            tentative_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo // 5)
-            tentative_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - (tentative_oosd * 2))
-            if tentative_isd + tentative_oosd > total_available_days_for_wfo:
-                calculated_isd = max(MIN_WFO_IS_DAYS, int(total_available_days_for_wfo * 0.7))
-                calculated_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo - calculated_isd)
-            else:
-                calculated_isd, calculated_oosd = tentative_isd, tentative_oosd
-            calculated_stepd = max(MIN_WFO_STEP_DAYS, calculated_oosd)
-            calculated_isd = max(MIN_WFO_IS_DAYS, calculated_isd)
-            calculated_oosd = max(MIN_WFO_OOS_DAYS, calculated_oosd)
-            if calculated_isd + calculated_oosd > total_available_days_for_wfo:
-                calculated_oosd = max(MIN_WFO_OOS_DAYS, int(total_available_days_for_wfo * 0.25))
-                calculated_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - calculated_oosd)
+            calculated_isd, calculated_oosd, calculated_stepd = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
+            if total_available_days_for_wfo >= MIN_WFO_IS_DAYS + MIN_WFO_OOS_DAYS:
+                tentative_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo // 5)
+                tentative_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - (tentative_oosd * 2))
+                if tentative_isd + tentative_oosd > total_available_days_for_wfo:
+                    calculated_isd = max(MIN_WFO_IS_DAYS, int(total_available_days_for_wfo * 0.7))
+                    calculated_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo - calculated_isd)
+                else:
+                    calculated_isd, calculated_oosd = tentative_isd, tentative_oosd
                 calculated_stepd = max(MIN_WFO_STEP_DAYS, calculated_oosd)
-            st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = calculated_isd, calculated_oosd, calculated_stepd
-            st.sidebar.caption(f"Suggested WFO: IS={calculated_isd}d, OOS={calculated_oosd}d, Step={calculated_stepd}d for {total_available_days_for_wfo}d total.")
-        else:
-            st.sidebar.caption(f"Total period ({total_available_days_for_wfo}d) is short. Min {MIN_WFO_IS_DAYS+MIN_WFO_OOS_DAYS}d recommended.")
+                calculated_isd = max(MIN_WFO_IS_DAYS, calculated_isd)
+                calculated_oosd = max(MIN_WFO_OOS_DAYS, calculated_oosd)
+                if calculated_isd + calculated_oosd > total_available_days_for_wfo:
+                    calculated_oosd = max(MIN_WFO_OOS_DAYS, int(total_available_days_for_wfo * 0.25))
+                    calculated_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - calculated_oosd)
+                    calculated_stepd = max(MIN_WFO_STEP_DAYS, calculated_oosd)
+                st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = calculated_isd, calculated_oosd, calculated_stepd
+                st.caption(f"Suggested WFO: IS={calculated_isd}d, OOS={calculated_oosd}d, Step={calculated_stepd}d for {total_available_days_for_wfo}d total.")
+            else:
+                st.caption(f"Total period ({total_available_days_for_wfo}d) is short. Min {MIN_WFO_IS_DAYS+MIN_WFO_OOS_DAYS}d recommended.")
 
-        wfo_isd_ui = st.sidebar.number_input("In-Sample (Days):", min_value=MIN_WFO_IS_DAYS, value=st.session_state.wfo_isd_ui_val, step=10, key="wfoisd_sidebar_v1")
-        wfo_oosd_ui = st.sidebar.number_input("Out-of-Sample (Days):", min_value=MIN_WFO_OOS_DAYS, value=st.session_state.wfo_oosd_ui_val, step=5, key="wfoosd_sidebar_v1")
-        wfo_sd_ui = st.sidebar.number_input("Step (Days):", min_value=max(MIN_WFO_STEP_DAYS, wfo_oosd_ui), value=max(st.session_state.wfo_sd_ui_val, wfo_oosd_ui), step=5, key="wfosd_sidebar_v1", help="Step must be >= Out-of-Sample days.")
-        st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
+            wfo_isd_ui = st.number_input("In-Sample (Days):", min_value=MIN_WFO_IS_DAYS, value=st.session_state.wfo_isd_ui_val, step=10, key="wfoisd_sidebar_v2")
+            wfo_oosd_ui = st.number_input("Out-of-Sample (Days):", min_value=MIN_WFO_OOS_DAYS, value=st.session_state.wfo_oosd_ui_val, step=5, key="wfoosd_sidebar_v2")
+            wfo_sd_ui = st.number_input("Step (Days):", min_value=max(MIN_WFO_STEP_DAYS, wfo_oosd_ui), value=max(st.session_state.wfo_sd_ui_val, wfo_oosd_ui), step=5, key="wfosd_sidebar_v2", help="Step must be >= Out-of-Sample days.")
+            st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
     
-    run_button_clicked = st.sidebar.button("Run Analysis", type="primary", use_container_width=True, key="run_main_sidebar_v1")
+    st.sidebar.markdown("---") # Visual separator before the run button
+    run_button_clicked = st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True, key="run_main_sidebar_v2")
 
-    # Package all sidebar inputs into a dictionary
     sidebar_inputs = {
         "selected_strategy_name": selected_strategy_name,
         "selected_ticker_name": selected_ticker_name,
@@ -304,11 +299,11 @@ def render_sidebar():
         "entry_end_minute_single_ui": entry_end_minute_single_ui,
         "analysis_mode_ui": analysis_mode_ui,
         "opt_algo_ui": opt_algo_ui,
-        "sl_min_opt_ui": sl_min_opt_ui, "sl_max_opt_ui": sl_max_opt_ui, "sl_steps_opt_ui": sl_steps_opt_ui,
-        "rrr_min_opt_ui": rrr_min_opt_ui, "rrr_max_opt_ui": rrr_max_opt_ui, "rrr_steps_opt_ui": rrr_steps_opt_ui,
-        "esh_min_opt_ui": esh_min_opt_ui, "esh_max_opt_ui": esh_max_opt_ui, "esh_steps_opt_ui": esh_steps_opt_ui,
+        "sl_min_opt_ui": sl_min_opt_ui, "sl_max_opt_ui": sl_max_opt_ui, "sl_steps_opt_ui": int(sl_steps_opt_ui), # Ensure steps are int
+        "rrr_min_opt_ui": rrr_min_opt_ui, "rrr_max_opt_ui": rrr_max_opt_ui, "rrr_steps_opt_ui": int(rrr_steps_opt_ui), # Ensure steps are int
+        "esh_min_opt_ui": esh_min_opt_ui, "esh_max_opt_ui": esh_max_opt_ui, "esh_steps_opt_ui": int(esh_steps_opt_ui), # Ensure steps are int
         "esm_vals_opt_ui": esm_vals_opt_ui,
-        "eeh_min_opt_ui": eeh_min_opt_ui, "eeh_max_opt_ui": eeh_max_opt_ui, "eeh_steps_opt_ui": eeh_steps_opt_ui,
+        "eeh_min_opt_ui": eeh_min_opt_ui, "eeh_max_opt_ui": eeh_max_opt_ui, "eeh_steps_opt_ui": int(eeh_steps_opt_ui), # Ensure steps are int
         "rand_iters_ui": rand_iters_ui,
         "opt_metric_ui": opt_metric_ui,
         "wfo_isd_ui": wfo_isd_ui, "wfo_oosd_ui": wfo_oosd_ui, "wfo_sd_ui": wfo_sd_ui,
@@ -328,12 +323,18 @@ def display_main_content_header(sidebar_inputs):
     selected_timeframe_display = [k for k, v in settings.AVAILABLE_TIMEFRAMES.items() if v == sidebar_inputs["ui_current_interval"]][0]
 
     st.title(f"🛡️📈 {settings.APP_TITLE}")
-    strategy_info_md = f"Selected Strategy: **{selected_strategy_name}** | Symbol: **{selected_ticker_name}** | Timeframe: **{selected_timeframe_display}** ({sidebar_inputs['ui_current_interval']})"
-    if selected_strategy_name == "Gap Guardian":
-        strategy_info_md += f" | Default Manual Entry: {settings.DEFAULT_ENTRY_WINDOW_START_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_START_MINUTE:02d}-{settings.DEFAULT_ENTRY_WINDOW_END_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_END_MINUTE:02d} NYT"
-    elif selected_strategy_name == "Silver Bullet":
-         strategy_info_md += f" | Fixed NYT Entry Windows: {', '.join([f'{s.strftime('%H:%M')}-{e.strftime('%H:%M')}' for s, e in settings.SILVER_BULLET_WINDOWS_NY])}"
-    st.markdown(strategy_info_md)
+    
+    # Using columns for a more structured header display
+    col1, col2 = st.columns([3,2]) # Adjust ratio as needed
+    with col1:
+        st.markdown(f"##### Strategy: **{selected_strategy_name}** on **{selected_ticker_name}** ({sidebar_inputs['ui_current_interval']})")
+    with col2:
+        if selected_strategy_name == "Gap Guardian":
+            st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Manual Entry: {settings.DEFAULT_ENTRY_WINDOW_START_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_START_MINUTE:02d}-{settings.DEFAULT_ENTRY_WINDOW_END_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_END_MINUTE:02d} NYT</p>", unsafe_allow_html=True)
+        elif selected_strategy_name == "Silver Bullet":
+             st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Fixed NYT Windows: {', '.join([f'{s.strftime('%H:%M')}-{e.strftime('%H:%M')}' for s, e in settings.SILVER_BULLET_WINDOWS_NY])}</p>", unsafe_allow_html=True)
+    
+    st.markdown("---") # Visual separator after main title and info
 
     with st.expander(f"Understanding the '{selected_strategy_name}' Strategy", expanded=False):
         st.markdown(STRATEGY_EXPLANATIONS.get(selected_strategy_name, "Explanation not available for this strategy."))
