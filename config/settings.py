@@ -4,6 +4,13 @@ Application-wide constants and default parameters.
 """
 import pytz
 import numpy as np
+from datetime import datetime
+
+# --- Application Information ---
+APP_VERSION = "0.7.0" # Or your current version
+APP_LAST_UPDATED = datetime.now().strftime('%Y-%m-%d %H:%M') # Auto-updates on run
+APP_DISCLAIMER = "Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management."
+
 
 # --- Strategy Settings ---
 AVAILABLE_STRATEGIES = ["Gap Guardian", "Unicorn", "Silver Bullet"]
@@ -73,9 +80,9 @@ LOG_LEVEL = 'INFO' # Change to 'DEBUG' for more verbose logs
 APP_TITLE = "Multi-Strategy Backtester" # Updated App Title
 
 # Metric Colors
-POSITIVE_METRIC_COLOR = "#28a745"
-NEGATIVE_METRIC_COLOR = "#dc3545"
-NEUTRAL_METRIC_COLOR = "#FAFAFA" # For dark theme, consider a lighter gray like #adb5bd
+POSITIVE_METRIC_COLOR = "#28a745" # Green for positive values
+NEGATIVE_METRIC_COLOR = "#dc3545" # Red for negative values
+NEUTRAL_METRIC_COLOR = "#6c757d" # A neutral gray, good for dark and light themes
 
 # --- Optimization Settings ---
 OPTIMIZATION_ALGORITHMS = ["Grid Search", "Random Search"]
