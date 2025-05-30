@@ -8,6 +8,9 @@ import numpy as np
 from datetime import time as dt_time
 
 from config import settings
+# Imports from the services package.
+# 'optimizer' here will refer to the services.optimizer package,
+# and its __init__.py makes the necessary functions available.
 from services import data_loader, strategy_engine, backtester, optimizer
 from utils.logger import get_logger
 
@@ -124,8 +127,10 @@ def run_analysis_pipeline(inputs):
             with st.spinner(f"Running {inputs['opt_algo_ui']} optimization... This may take some time."):
                 try:
                     if inputs['opt_algo_ui'] == "Grid Search":
+                        # Calls optimizer.run_grid_search (from services.optimizer.search_algorithms)
                         opt_df = optimizer.run_grid_search(st.session_state.price_data, inputs['initial_capital_ui'], inputs['risk_per_trade_percent_ui'], actual_params_to_optimize_config, inputs['ui_current_interval'], optimizer_control_params, optimization_progress_callback)
                     else: # Random Search
+                        # Calls optimizer.run_random_search (from services.optimizer.search_algorithms)
                         opt_df = optimizer.run_random_search(st.session_state.price_data, inputs['initial_capital_ui'], inputs['risk_per_trade_percent_ui'], actual_params_to_optimize_config, inputs['ui_current_interval'], optimizer_control_params, optimization_progress_callback)
                     
                     st.session_state.optimization_results_df = opt_df
@@ -183,6 +188,7 @@ def run_analysis_pipeline(inputs):
             
             with st.spinner(f"Running Walk-Forward Optimization with {inputs['opt_algo_ui']}... This will take considerable time."):
                 try:
+                    # Calls optimizer.run_walk_forward_optimization (from services.optimizer.wfo_orchestrator)
                     wfo_log_df, oos_trades_df, oos_equity_series, oos_performance_summary = optimizer.run_walk_forward_optimization(
                         st.session_state.price_data, inputs['initial_capital_ui'], inputs['risk_per_trade_percent_ui'],
                         wfo_parameters_for_run, inputs['opt_algo_ui'], wfo_optimizer_config_and_control,
@@ -206,4 +212,3 @@ def run_analysis_pipeline(inputs):
                     if prog_bar_container: prog_bar_container.progress(1.0, text="WFO Complete!")
     
     if prog_bar_container is not None: prog_bar_container.empty()
-
