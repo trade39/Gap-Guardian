@@ -3,7 +3,7 @@
 /* General body styling */
 body {
     font-family: 'Inter', sans-serif;
-    line-height: 1.6; /* Improved overall line height for readability */
+    line-height: 1.6; 
 }
 
 /* Input widgets */
@@ -21,90 +21,182 @@ body {
 }
 
 /* Performance Summary Header Styling */
-.performance-summary-header h3 { /* Targeting st.subheader */
-    margin-bottom: 0.5rem; /* Space below the main title */
+.performance-summary-header h3 { 
+    margin-bottom: 0.5rem; 
     font-weight: 600;
 }
 
 .performance-summary-details {
     font-size: 0.9em;
-    color: #A0A0B0; /* Match metric label color for consistency */
-    margin-bottom: 1.5rem; /* More space before metric cards */
+    color: #A0A0B0; 
+    margin-bottom: 1.5rem; 
     line-height: 1.5;
 }
 
 .summary-parameter-detail {
-    display: block; /* Each parameter on a new line */
+    display: block; 
     margin-bottom: 0.25rem;
 }
 
-.summary-parameter-detail strong {
-    color: #D0D0D0; /* Slightly lighter color for parameter names for dark theme */
+.summary-parameter-detail strong { /* This was for Markdown bold, which was removed */
+    /* color: #D0D0D0; */ /* No longer needed if not using Markdown bold */
+    font-weight: 500; /* Apply medium weight directly if desired */
 }
 
 
 /* Custom Metric Card Styling */
 .metric-card {
-    background-color: transparent; /* Inherits from theme's secondaryBackgroundColor */
-    border-radius: 10px; /* Slightly more rounded */
-    padding: 20px; /* Increased padding */
-    border: 1px solid #333745; /* Slightly adjusted border for dark theme */
-    margin-bottom: 1.25rem; /* Increased spacing between cards */
-    min-height: 110px; /* Ensure a consistent minimum height, allow auto growth */
-    height: auto; /* Allow height to adjust to content */
+    background-color: transparent; 
+    border-radius: 10px; 
+    padding: 20px; 
+    border: 1px solid #333745; 
+    margin-bottom: 1.25rem; 
+    min-height: 110px; 
+    height: auto; 
     display: flex;
     flex-direction: column;
-    justify-content: center; /* Vertically center content */
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
-    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out; /* Smooth transition for hover */
+    justify-content: center; 
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); 
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out; 
 }
 
 .metric-card:hover {
-    transform: translateY(-2px); /* Slight lift on hover */
+    transform: translateY(-2px); 
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
 .metric-label {
     font-weight: 500; 
     color: #A0A0B0; 
-    font-size: 0.9em; /* Slightly increased for better readability */
-    margin-bottom: 0.4rem; /* Adjusted spacing */
+    font-size: 0.9em; 
+    margin-bottom: 0.4rem; 
     line-height: 1.3;
 }
 
 .metric-value {
-    font-size: 1.75em; /* Slightly increased for emphasis */
+    font-size: 1.75em; 
     font-weight: 600; 
     line-height: 1.3;
-    /* Color is set inline by Python based on value */
 }
 
 /* Ensure Inter font is available */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 /* Apply Inter font globally if not overridden by Streamlit's theme */
-body, .stApp, .stTextInput, .stButton, .stSelectbox, .stNumberInput, .stDateInput, .stMarkdown, .stTabs {
+body, .stApp, .stTextInput, .stButton>button, .stSelectbox, .stNumberInput, .stDateInput, .stMarkdown, .stTabs, .stRadio>label {
     font-family: 'Inter', sans-serif !important;
 }
 
 /* Specific styling for subheaders used as titles */
-h3 { /* Targets st.subheader */
+h3 { 
     font-weight: 600 !important;
-    color: #E0E0E0 !important; /* Lighter color for subheaders in dark mode */
+    color: #E0E0E0 !important; 
     margin-top: 1rem;
     margin-bottom: 0.75rem;
 }
 
-/* Styling for the main title (st.title) if needed, though often handled by theme */
-h1 { /* Targets st.title */
+h1 { 
     font-weight: 700 !important;
     margin-bottom: 1rem;
 }
 
-/* Horizontal rule styling */
 hr {
-    border-top: 1px solid #333745; /* Match card border for consistency */
+    border-top: 1px solid #333745; 
     margin-top: 1rem;
     margin-bottom: 1rem;
+}
+
+/* --- Blue Accent for Widgets --- */
+:root {
+    --app-primary-blue: #1E88E5; /* A modern, vibrant blue */
+    --app-primary-blue-hover: #1565C0; /* A slightly darker blue for hover */
+    --app-primary-blue-text: #FFFFFF; /* White text for good contrast on blue buttons */
+}
+
+/* Primary Buttons (e.g., "Run Analysis") */
+/* Streamlit uses classes like eflotvi1 for buttons, which can change.
+   Targeting by attribute `kind="primary"` is more robust if possible,
+   but direct class targeting is often needed.
+   This targets buttons that are direct children of .stButton
+   and attempts to style primary ones. Streamlit's default theme might override this.
+   A more specific selector might be needed by inspecting the deployed app.
+*/
+.stButton>button[kind="primary"], /* For newer Streamlit versions */
+.stButton>button:not([kind="secondary"]):not([kind="form_submit"]) /* Attempt to target default primary */ {
+    background-color: var(--app-primary-blue) !important;
+    color: var(--app-primary-blue-text) !important;
+    border: 1px solid var(--app-primary-blue) !important;
+    transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+}
+
+.stButton>button[kind="primary"]:hover,
+.stButton>button:not([kind="secondary"]):not([kind="form_submit"]):hover {
+    background-color: var(--app-primary-blue-hover) !important;
+    border-color: var(--app-primary-blue-hover) !important;
+    color: var(--app-primary-blue-text) !important;
+}
+
+.stButton>button[kind="primary"]:focus,
+.stButton>button:not([kind="secondary"]):not([kind="form_submit"]):focus {
+    box-shadow: 0 0 0 0.2rem rgba(30, 136, 229, 0.5) !important; /* Blue focus ring */
+}
+
+
+/* Radio Buttons */
+/* Targeting the selected radio button's dot */
+/* Streamlit's radio button structure: label > div > input + div (the dot) */
+/* This selector is specific and might need adjustment based on Streamlit version */
+/* For the actual dot of the selected radio button */
+div[data-baseweb="radio"] input[type="radio"]:checked + div {
+    background-color: var(--app-primary-blue) !important;
+    border-color: var(--app-primary-blue) !important;
+}
+/* To ensure the outer ring also takes the color if it's separate */
+div[data-baseweb="radio"] input[type="radio"]:checked + div::before {
+    background-color: var(--app-primary-blue) !important; /* if the dot is a ::before pseudo-element */
+}
+/* Radio button label text color (optional, if you want to change it from default) */
+.stRadio>label {
+    color: #D0D0D0; /* Light gray for label text, adjust as needed */
+}
+
+
+/* Select Boxes */
+/* Border color when focused */
+div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--app-primary-blue) !important;
+    box-shadow: 0 0 0 0.2rem rgba(30, 136, 229, 0.3) !important; /* Subtle blue glow */
+}
+/* Dropdown arrow color - this can be tricky as it's often an SVG */
+/* This is a general attempt; might need more specific targeting */
+div[data-baseweb="select"] svg {
+    fill: #A0A0B0; /* Default arrow color, change if needed */
+}
+div[data-baseweb="select"] > div:focus-within svg {
+    fill: var(--app-primary-blue) !important; /* Blue arrow on focus */
+}
+
+
+/* Multiselect Selected Items (Pills) */
+/* As seen in image_08ff21.png, the selected items are red. Let's make them blue. */
+/* Streamlit uses a structure like: div[data-baseweb="pill"] */
+div[data-testid="stMultiSelect"] div[data-baseweb="pill"] {
+    background-color: var(--app-primary-blue) !important;
+    color: var(--app-primary-blue-text) !important;
+    border-radius: 12px !important; /* Make them more pill-like */
+    padding: 4px 10px !important;
+}
+/* Styling the 'x' (remove) icon within the pill */
+div[data-testid="stMultiSelect"] div[data-baseweb="pill"] svg {
+    fill: var(--app-primary-blue-text) !important; /* White 'x' */
+}
+
+/* Styling for st.tabs selected tab underline */
+div[data-baseweb="tabs"] div[role="tablist"] button[aria-selected="true"] {
+    border-bottom-color: var(--app-primary-blue) !important;
+    color: var(--app-primary-blue) !important; /* Text color of active tab */
+}
+div[data-baseweb="tabs"] div[role="tablist"] button:hover {
+    color: var(--app-primary-blue-hover) !important;
 }
 
