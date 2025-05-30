@@ -7,6 +7,7 @@ import sys
 import os
 import streamlit as st
 from datetime import datetime
+import pandas as pd # Added import for pandas
 
 # --- sys.path modification ---
 APP_FILE_PATH = os.path.abspath(__file__)
