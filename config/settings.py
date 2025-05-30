@@ -5,9 +5,10 @@ Application-wide constants and default parameters.
 import pytz
 import numpy as np
 from datetime import datetime
+import os # Added for os.cpu_count()
 
 # --- Application Information ---
-APP_VERSION = "0.7.0" # Or your current version
+APP_VERSION = "0.7.1" # Incremented version
 APP_LAST_UPDATED = datetime.now().strftime('%Y-%m-%d %H:%M') # Auto-updates on run
 APP_DISCLAIMER = "Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management."
 
@@ -89,6 +90,12 @@ OPTIMIZATION_ALGORITHMS = ["Grid Search", "Random Search"]
 DEFAULT_OPTIMIZATION_ALGORITHM = "Grid Search"
 OPTIMIZATION_METRICS = ["Total P&L", "Profit Factor", "Win Rate", "Sharpe Ratio (Annualized)", "Sortino Ratio (Annualized)", "Max Drawdown (%)"]
 DEFAULT_OPTIMIZATION_METRIC = "Sharpe Ratio (Annualized)"
+
+# Number of parallel processes for optimization.
+# Defaults to number of CPU cores minus 1, or 1 if only 1 core.
+# Set to 1 to disable parallelization for debugging.
+OPTIMIZER_NUM_CORES = max(1, os.cpu_count() - 1) if os.cpu_count() else 1
+
 
 # Parameter ranges for optimization (can be made strategy-specific later)
 DEFAULT_SL_POINTS_OPTIMIZATION_RANGE = {"min": 5.0, "max": 50.0, "steps": 5} # Expanded range
