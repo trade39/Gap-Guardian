@@ -1,12 +1,11 @@
 # .streamlit/config.toml
 
 [theme]
-base="dark"
-primaryColor="#7792E3" # A pleasant blue, good for primary actions
-backgroundColor="#0E1117" # Standard dark background
-secondaryBackgroundColor="#262730" # Slightly lighter for cards, sidebars etc.
-textColor="#FAFAFA" # Off-white for good readability on dark backgrounds
-font="sans serif" # Or "serif", "monospace"
+primaryColor="#1E88E5"
+backgroundColor="#0E1117" # Example dark theme background
+secondaryBackgroundColor="#262730" # Example dark theme secondary background
+textColor="#FAFAFA"
+font="sans serif" # Or "Inter" if you've configured it globally
 
 # You can also specify specific font colors for different elements if needed
 # For example:
