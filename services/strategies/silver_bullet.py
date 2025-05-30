@@ -9,49 +9,11 @@ import pandas as pd
 # Project-specific imports
 from config import settings
 from utils.logger import get_logger
-# Assuming _find_fvg is defined in unicorn and we want to use that exact one.
-# If it were in a common utils file: from utils.technical_analysis import _find_fvg
-# For now, let's use the one from unicorn.py, which means it needs to be importable.
-# This creates a dependency between strategies if not careful.
-# A better approach would be a common TA utility file.
-# For this fix, let's assume unicorn._find_fvg is accessible or redefine locally.
-# To avoid inter-strategy dependency for now, let's copy/paste _find_fvg if needed.
-# The _find_fvg in unicorn.py was:
-# def _find_fvg(data: pd.DataFrame, bar_index: int, direction: str = "bullish") -> tuple[float, float] | None:
-#     if bar_index + 3 >= len(data): return None
-#     bar1, bar2, bar3 = data.iloc[bar_index + 1], data.iloc[bar_index + 2], data.iloc[bar_index + 3]
-#     if direction == "bullish" and bar1['High'] < bar3['Low'] and bar2['Close'] > bar2['Open']:
-#         return bar1['High'], bar3['Low']
-#     elif direction == "bearish" and bar1['Low'] > bar3['High'] and bar2['Close'] < bar2['Open']:
-#         return bar3['High'], bar1['Low']
-#     return None
-# This is the same definition as used in the original silver_bullet.py. Let's keep it local for now.
+from utils.technical_analysis import find_fvg # Centralized TA function
 
 logger = get_logger(__name__)
 
-def _find_fvg_for_silver_bullet(data: pd.DataFrame, bar_index: int, direction: str = "bullish") -> tuple[float, float] | None:
-    """
-    Identifies a Fair Value Gap (FVG) based on a 3-bar pattern.
-    The FVG is identified based on the bars at indices: bar_index+1, bar_index+2, bar_index+3.
-    The FVG itself is the price range on bar_index+2, defined by the wicks of bar_index+1 and bar_index+3.
-    """
-    if bar_index + 3 >= len(data): # Need at least bar_index+1, bar_index+2, bar_index+3
-        return None
-    
-    bar1 = data.iloc[bar_index + 1] # First bar of the 3-bar pattern
-    bar2 = data.iloc[bar_index + 2] # Middle bar (where the gap is)
-    bar3 = data.iloc[bar_index + 3] # Third bar of the 3-bar pattern
-
-    if direction == "bullish":
-        # Bullish FVG: bar1.High < bar3.Low, and bar2 is a bullish candle (strong move)
-        if bar1['High'] < bar3['Low'] and bar2['Close'] > bar2['Open']:
-            return bar1['High'], bar3['Low'] # FVG is the space between bar1's high and bar3's low
-    elif direction == "bearish":
-        # Bearish FVG: bar1.Low > bar3.High, and bar2 is a bearish candle (strong move)
-        if bar1['Low'] > bar3['High'] and bar2['Close'] < bar2['Open']:
-            return bar3['High'], bar1['Low'] # FVG is the space between bar3's high and bar1's low
-    return None
-
+# Local _find_fvg_for_silver_bullet is now removed, using centralized find_fvg.
 
 def generate_silver_bullet_signals(
     data: pd.DataFrame,
@@ -70,8 +32,11 @@ def generate_silver_bullet_signals(
 
     # Iterate through the data. Entry on current_bar 'i' into an FVG that completed on bar 'i-1'
     # (formed by i-3, i-2, i-1).
+    # `find_fvg` expects `bar_index` to be the bar *before* the 3-bar FVG pattern.
+    # So, to check an FVG formed by bars (i-3, i-2, i-1), `bar_index` for `find_fvg` should be `i-4`.
     for i in range(len(data)):
-        if i < 3: # Need at least 3 previous bars to check for an FVG ending at i-1
+        if i < 3: # Need at least 3 previous bars (i-3, i-2, i-1) to check for an FVG, plus current bar (i) for entry.
+                  # So, i-4 must be >= 0. This means i must be >= 4.
             continue
 
         current_bar = data.iloc[i]
@@ -87,16 +52,13 @@ def generate_silver_bullet_signals(
         
         if not in_sb_window:
             continue
-
-        # Check for FVG formed by bars (i-3), (i-2), (i-1).
-        # `bar_index` for `_find_fvg_for_silver_bullet` should be `i-4`
-        # so that bar1 = data[i-3], bar2 = data[i-2], bar3 = data[i-1]
-        fvg_check_idx = i - 4
-        if fvg_check_idx < 0: continue
-
+        
+        fvg_check_idx = i - 4 # Index of bar *before* the potential 3-bar FVG pattern (i-3, i-2, i-1)
+        if fvg_check_idx < 0: # Should be caught by i < 3 check.
+            continue
 
         # Bullish FVG check
-        bullish_fvg_details = _find_fvg_for_silver_bullet(data, fvg_check_idx, "bullish")
+        bullish_fvg_details = find_fvg(data, fvg_check_idx, "bullish")
         if bullish_fvg_details:
             fvg_b_low_boundary, fvg_b_high_boundary = bullish_fvg_details # (bar1.High, bar3.Low)
             # Entry if current_bar.Low dips into FVG (i.e., below fvg_b_high_boundary)
@@ -115,7 +77,7 @@ def generate_silver_bullet_signals(
                 continue # Avoid multiple signals on same FVG with subsequent bars if logic allows
 
         # Bearish FVG check
-        bearish_fvg_details = _find_fvg_for_silver_bullet(data, fvg_check_idx, "bearish")
+        bearish_fvg_details = find_fvg(data, fvg_check_idx, "bearish")
         if bearish_fvg_details:
             fvg_s_low_boundary, fvg_s_high_boundary = bearish_fvg_details # (bar3.High, bar1.Low)
             # Entry if current_bar.High rallies into FVG (i.e., above fvg_s_low_boundary)
