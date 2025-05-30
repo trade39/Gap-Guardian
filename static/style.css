@@ -3,6 +3,7 @@
 /* General body styling */
 body {
     font-family: 'Inter', sans-serif;
+    line-height: 1.6; /* Improved overall line height for readability */
 }
 
 /* Input widgets */
@@ -19,30 +20,61 @@ body {
     overflow: hidden;
 }
 
+/* Performance Summary Header Styling */
+.performance-summary-header h3 { /* Targeting st.subheader */
+    margin-bottom: 0.5rem; /* Space below the main title */
+    font-weight: 600;
+}
+
+.performance-summary-details {
+    font-size: 0.9em;
+    color: #A0A0B0; /* Match metric label color for consistency */
+    margin-bottom: 1.5rem; /* More space before metric cards */
+    line-height: 1.5;
+}
+
+.summary-parameter-detail {
+    display: block; /* Each parameter on a new line */
+    margin-bottom: 0.25rem;
+}
+
+.summary-parameter-detail strong {
+    color: #D0D0D0; /* Slightly lighter color for parameter names for dark theme */
+}
+
+
 /* Custom Metric Card Styling */
 .metric-card {
     background-color: transparent; /* Inherits from theme's secondaryBackgroundColor */
-    border-radius: 8px;
-    padding: 15px; /* Standard padding */
-    border: 1px solid #2A2D3A; /* Subtle border for dark theme */
-    margin-bottom: 1rem; /* Spacing between cards if stacked in a single column */
-    height: 100px; /* Fixed height for alignment, adjust as needed */
+    border-radius: 10px; /* Slightly more rounded */
+    padding: 20px; /* Increased padding */
+    border: 1px solid #333745; /* Slightly adjusted border for dark theme */
+    margin-bottom: 1.25rem; /* Increased spacing between cards */
+    min-height: 110px; /* Ensure a consistent minimum height, allow auto growth */
+    height: auto; /* Allow height to adjust to content */
     display: flex;
     flex-direction: column;
     justify-content: center; /* Vertically center content */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out; /* Smooth transition for hover */
+}
+
+.metric-card:hover {
+    transform: translateY(-2px); /* Slight lift on hover */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
 .metric-label {
-    font-weight: 500; /* Slightly less bold than default st.metric label */
-    color: #A0A0B0; /* Lighter gray for label text, good contrast on dark */
-    font-size: 0.85em; /* Slightly smaller than default st.metric label */
-    margin-bottom: 0.3rem;
-    line-height: 1.2;
+    font-weight: 500; 
+    color: #A0A0B0; 
+    font-size: 0.9em; /* Slightly increased for better readability */
+    margin-bottom: 0.4rem; /* Adjusted spacing */
+    line-height: 1.3;
 }
 
 .metric-value {
-    font-size: 1.6em; /* Slightly larger than default st.metric value */
-    font-weight: 600; /* Bolder value */
+    font-size: 1.75em; /* Slightly increased for emphasis */
+    font-weight: 600; 
     line-height: 1.3;
     /* Color is set inline by Python based on value */
 }
@@ -51,6 +83,28 @@ body {
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 /* Apply Inter font globally if not overridden by Streamlit's theme */
-body, .stApp, .stTextInput, .stButton, .stSelectbox, .stNumberInput, .stDateInput {
+body, .stApp, .stTextInput, .stButton, .stSelectbox, .stNumberInput, .stDateInput, .stMarkdown, .stTabs {
     font-family: 'Inter', sans-serif !important;
 }
+
+/* Specific styling for subheaders used as titles */
+h3 { /* Targets st.subheader */
+    font-weight: 600 !important;
+    color: #E0E0E0 !important; /* Lighter color for subheaders in dark mode */
+    margin-top: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+/* Styling for the main title (st.title) if needed, though often handled by theme */
+h1 { /* Targets st.title */
+    font-weight: 700 !important;
+    margin-bottom: 1rem;
+}
+
+/* Horizontal rule styling */
+hr {
+    border-top: 1px solid #333745; /* Match card border for consistency */
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+}
+
