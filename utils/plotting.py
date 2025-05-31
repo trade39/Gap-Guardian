@@ -2,12 +2,13 @@
 """
 Functions for creating visualizations using Plotly.
 Handles duplicate entries in optimization results for heatmap generation.
+Includes P&L by time period visualizations.
 """
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
-from config.settings import PLOTLY_TEMPLATE
+from config.settings import PLOTLY_TEMPLATE # Assuming PLOTLY_TEMPLATE is defined in settings
 from utils.logger import get_logger
 
 # Instantiate logger
@@ -27,6 +28,8 @@ def plot_equity_curve(equity_curve: pd.Series, title: str = "Equity Curve") -> g
     fig = go.Figure()
     if not equity_curve.empty:
         fig.add_trace(go.Scatter(x=equity_curve.index, y=equity_curve, mode='lines', name='Equity'))
+    else:
+        fig.add_annotation(text="No equity data to display.", showarrow=False, yshift=10)
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Equity", template=PLOTLY_TEMPLATE, height=500, hovermode="x unified")
     return fig
 
@@ -82,26 +85,35 @@ def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol:
                                     low=price_data['Low'],
                                     close=price_data['Close'],
                                     name=f'{symbol} Price'), row=1, col=1)
+    else:
+        fig.add_annotation(text="No price data to display.", showarrow=False, yshift=10)
+
 
     if not trades.empty:
-        long_entries = trades[trades['Type'] == 'Long']
-        fig.add_trace(go.Scatter(x=long_entries['EntryTime'], y=long_entries['EntryPrice'],
-                                 mode='markers', name='Long Entry',
-                                 marker=dict(color='green', size=10, symbol='triangle-up')), row=1, col=1)
-        
-        short_entries = trades[trades['Type'] == 'Short']
-        fig.add_trace(go.Scatter(x=short_entries['EntryTime'], y=short_entries['EntryPrice'],
-                                 mode='markers', name='Short Entry',
-                                 marker=dict(color='red', size=10, symbol='triangle-down')), row=1, col=1)
+        # Ensure 'EntryTime' and 'ExitTime' are datetime objects
+        trades_plot_df = trades.copy()
+        if 'EntryTime' in trades_plot_df.columns and not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
+            trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
+        if 'ExitTime' in trades_plot_df.columns and not pd.api.types.is_datetime64_any_dtype(trades_plot_df['ExitTime']):
+            trades_plot_df['ExitTime'] = pd.to_datetime(trades_plot_df['ExitTime'])
 
-        fig.add_trace(go.Scatter(x=trades['ExitTime'], y=trades['ExitPrice'],
-                                 mode='markers', name='Exit',
-                                 marker=dict(color='blue', size=8, symbol='square')), row=1, col=1)
+
+        long_entries = trades_plot_df[trades_plot_df['Type'] == 'Long']
+        if not long_entries.empty:
+            fig.add_trace(go.Scatter(x=long_entries['EntryTime'], y=long_entries['EntryPrice'],
+                                     mode='markers', name='Long Entry',
+                                     marker=dict(color='green', size=10, symbol='triangle-up')), row=1, col=1)
         
-        # Optional: SL/TP lines (can be noisy)
-        # for _, trade in trades.iterrows():
-        #     fig.add_shape(type="line", x0=trade['EntryTime'], y0=trade['SL'], x1=trade['ExitTime'], y1=trade['SL'], line=dict(color="rgba(255,0,0,0.3)", width=1, dash="dash"))
-        #     fig.add_shape(type="line", x0=trade['EntryTime'], y0=trade['TP'], x1=trade['ExitTime'], y1=trade['TP'], line=dict(color="rgba(0,255,0,0.3)", width=1, dash="dash"))
+        short_entries = trades_plot_df[trades_plot_df['Type'] == 'Short']
+        if not short_entries.empty:
+            fig.add_trace(go.Scatter(x=short_entries['EntryTime'], y=short_entries['EntryPrice'],
+                                     mode='markers', name='Short Entry',
+                                     marker=dict(color='red', size=10, symbol='triangle-down')), row=1, col=1)
+        
+        if 'ExitTime' in trades_plot_df.columns and 'ExitPrice' in trades_plot_df.columns:
+             fig.add_trace(go.Scatter(x=trades_plot_df['ExitTime'], y=trades_plot_df['ExitPrice'],
+                                     mode='markers', name='Exit',
+                                     marker=dict(color='blue', size=8, symbol='square')), row=1, col=1)
 
     fig.update_layout(title=f'Trades for {symbol}', xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, template=PLOTLY_TEMPLATE, height=600, hovermode="x unified")
     return fig
@@ -109,70 +121,36 @@ def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol:
 
 def plot_optimization_heatmap(
     optimization_results_df: pd.DataFrame,
-    param1_name: str,  # Typically the column for x-axis (e.g., 'SL Points')
-    param2_name: str,  # Typically the index for y-axis (e.g., 'RRR')
-    metric_name: str   # The value to be shown in the heatmap cells
+    param1_name: str,
+    param2_name: str,
+    metric_name: str
 ) -> go.Figure:
     """
     Generates a heatmap for visualizing optimization results between two parameters.
     Handles duplicate index/column entries by averaging the metric.
-
-    Args:
-        optimization_results_df (pd.DataFrame): DataFrame of optimization results.
-        param1_name (str): Name of the first parameter (columns).
-        param2_name (str): Name of the second parameter (rows).
-        metric_name (str): Name of the metric to plot as heatmap values.
-
-    Returns:
-        go.Figure: Plotly figure object.
     """
+    fig = go.Figure() # Initialize fig to ensure it's always defined
     if optimization_results_df.empty or not all(p in optimization_results_df.columns for p in [param1_name, param2_name, metric_name]):
         logger.warning(f"Insufficient data or missing columns for heatmap. Params: {param1_name}, {param2_name}. Metric: {metric_name}. Columns available: {optimization_results_df.columns.tolist()}")
-        fig = go.Figure()
         fig.update_layout(title=f"Insufficient Data for Heatmap ({metric_name})", height=400, template=PLOTLY_TEMPLATE)
         fig.add_annotation(text="Not enough data or missing columns for heatmap generation.", showarrow=False)
         return fig
 
     try:
-        # Ensure param1_name and param2_name exist
-        if param1_name not in optimization_results_df.columns:
-            raise ValueError(f"Parameter '{param1_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
-        if param2_name not in optimization_results_df.columns:
-            raise ValueError(f"Parameter '{param2_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
-        if metric_name not in optimization_results_df.columns:
-             raise ValueError(f"Metric '{metric_name}' not found in optimization results columns: {optimization_results_df.columns.tolist()}")
-
-
-        # Handle potential duplicate (param1_name, param2_name) combinations by averaging the metric
-        # This is crucial for the pivot operation to succeed.
-        # We group by the two parameters that will form the axes of the heatmap
-        # and then select the metric_name, taking the mean.
-        # .reset_index() is called to turn the grouped Series back into a DataFrame suitable for pivot.
-        
         logger.debug(f"Original optimization_results_df for heatmap (head):\n{optimization_results_df[[param1_name, param2_name, metric_name]].head()}")
 
-        # Check for NaN values in grouping columns before aggregation
-        if optimization_results_df[[param1_name, param2_name]].isnull().any().any():
-            logger.warning(f"NaN values found in grouping columns ('{param1_name}', '{param2_name}') for heatmap. Dropping rows with NaNs in these columns.")
-            cleaned_df = optimization_results_df.dropna(subset=[param1_name, param2_name])
-        else:
-            cleaned_df = optimization_results_df
+        cleaned_df = optimization_results_df.dropna(subset=[param1_name, param2_name, metric_name])
         
         if cleaned_df.empty:
             logger.warning("DataFrame became empty after attempting to clean NaNs from grouping columns for heatmap.")
-            fig = go.Figure()
             fig.update_layout(title=f"No Valid Data for Heatmap ({metric_name}) after NaN cleaning", height=400, template=PLOTLY_TEMPLATE)
             fig.add_annotation(text="Data became empty after cleaning NaNs from axis parameters.", showarrow=False)
             return fig
 
-        # Aggregate duplicate entries
         aggregated_df = cleaned_df.groupby([param2_name, param1_name], as_index=False)[metric_name].mean()
         logger.debug(f"Aggregated_df for heatmap (head):\n{aggregated_df.head()}")
 
-        # Pivot the aggregated data to create a matrix for the heatmap
         heatmap_data = aggregated_df.pivot(index=param2_name, columns=param1_name, values=metric_name)
-        
-        # Sort index (param2_name, typically RRR) in descending order for conventional heatmap display
         heatmap_data = heatmap_data.sort_index(ascending=False) 
         logger.debug(f"Pivoted heatmap_data (head):\n{heatmap_data.head()}")
         
@@ -182,19 +160,158 @@ def plot_optimization_heatmap(
                         y=heatmap_data.index, 
                         aspect="auto",
                         color_continuous_scale=px.colors.diverging.RdYlGn if "P&L" in metric_name or "Ratio" in metric_name or "Factor" in metric_name else px.colors.sequential.Viridis,
-                        origin='lower' # Ensures y-axis starts from bottom with sorted data
+                        origin='lower'
                        )
         
         fig.update_layout(title=f'Optimization Heatmap: {metric_name} vs. {param1_name} & {param2_name}',
                           xaxis_title=param1_name, yaxis_title=param2_name, height=600, template=PLOTLY_TEMPLATE)
         
-        # Ensure x and y axes ticks are formatted correctly, especially for float values
         fig.update_xaxes(type='category', tickvals=heatmap_data.columns, ticktext=[f"{x:.2f}" if isinstance(x, float) else str(x) for x in heatmap_data.columns])
         fig.update_yaxes(type='category', tickvals=heatmap_data.index, ticktext=[f"{y:.1f}" if isinstance(y, float) else str(y) for y in heatmap_data.index])
 
     except Exception as e:
         logger.error(f"Error creating heatmap for metric '{metric_name}' with params '{param1_name}', '{param2_name}': {e}", exc_info=True)
-        fig = go.Figure()
         fig.update_layout(title=f"Error Generating Heatmap: Review Logs", height=400, template=PLOTLY_TEMPLATE)
         fig.add_annotation(text=f"Could not generate heatmap. Details: {str(e)}", showarrow=False)
+    return fig
+
+def plot_pnl_by_hour(trades_df: pd.DataFrame, title: str = "P&L by Hour of Day") -> go.Figure:
+    """
+    Plots the aggregated P&L by hour of the day.
+    Args:
+        trades_df (pd.DataFrame): DataFrame of executed trades with 'P&L' and 'EntryTime'.
+                                  'EntryTime' is assumed to be timezone-aware (e.g., NY time).
+        title (str): Title of the plot.
+    Returns:
+        go.Figure: Plotly bar chart figure object.
+    """
+    fig = go.Figure()
+    if trades_df.empty or 'P&L' not in trades_df.columns or 'EntryTime' not in trades_df.columns:
+        logger.warning("P&L by Hour: Trades data is empty or missing required columns (P&L, EntryTime).")
+        fig.update_layout(title=title, height=300, template=PLOTLY_TEMPLATE)
+        fig.add_annotation(text="No trade data available for P&L by Hour.", showarrow=False)
+        return fig
+
+    trades_plot_df = trades_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
+        trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
+    
+    # Ensure EntryTime is timezone-aware if it's not already.
+    # This depends on your application's timezone strategy. If EntryTime is already localized (e.g., to NY), this might not be needed.
+    # If it's naive, you might want to localize it to a specific timezone (e.g., 'America/New_York')
+    # For now, we assume it's correctly localized or naive UTC that can be converted.
+    if trades_plot_df['EntryTime'].dt.tz is None:
+        logger.info("P&L by Hour: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
+        try:
+            trades_plot_df['EntryTime'] = trades_plot_df['EntryTime'].dt.tz_localize('UTC').dt.tz_convert('America/New_York')
+        except Exception as e:
+            logger.error(f"P&L by Hour: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
+            # Proceeding with naive time, which might be misleading if data spans DST changes or multiple timezones.
+
+    trades_plot_df['Hour'] = trades_plot_df['EntryTime'].dt.hour
+    pnl_by_hour = trades_plot_df.groupby('Hour')['P&L'].sum().reset_index()
+    
+    all_hours = pd.DataFrame({'Hour': range(24)})
+    pnl_by_hour = pd.merge(all_hours, pnl_by_hour, on='Hour', how='left').fillna(0)
+    pnl_by_hour = pnl_by_hour.sort_values(by='Hour')
+
+    fig = px.bar(pnl_by_hour, x='Hour', y='P&L', title=title, labels={'Hour': 'Hour of Day (Entry Time)', 'P&L': 'Total P&L'})
+    fig.update_layout(template=PLOTLY_TEMPLATE, height=400, xaxis_type='category')
+    fig.update_traces(marker_color=['red' if p < 0 else 'green' for p in pnl_by_hour['P&L']])
+    return fig
+
+def plot_pnl_by_day_of_week(trades_df: pd.DataFrame, title: str = "P&L by Day of Week") -> go.Figure:
+    """
+    Plots the aggregated P&L by day of the week.
+    Args:
+        trades_df (pd.DataFrame): DataFrame of executed trades with 'P&L' and 'EntryTime'.
+        title (str): Title of the plot.
+    Returns:
+        go.Figure: Plotly bar chart figure object.
+    """
+    fig = go.Figure()
+    if trades_df.empty or 'P&L' not in trades_df.columns or 'EntryTime' not in trades_df.columns:
+        logger.warning("P&L by Day: Trades data is empty or missing required columns (P&L, EntryTime).")
+        fig.update_layout(title=title, height=300, template=PLOTLY_TEMPLATE)
+        fig.add_annotation(text="No trade data available for P&L by Day of Week.", showarrow=False)
+        return fig
+
+    trades_plot_df = trades_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
+        trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
+
+    # Similar timezone handling as plot_pnl_by_hour
+    if trades_plot_df['EntryTime'].dt.tz is None:
+        logger.info("P&L by Day: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
+        try:
+            trades_plot_df['EntryTime'] = trades_plot_df['EntryTime'].dt.tz_localize('UTC').dt.tz_convert('America/New_York')
+        except Exception as e:
+            logger.error(f"P&L by Day: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
+
+
+    trades_plot_df['DayOfWeek'] = trades_plot_df['EntryTime'].dt.day_name()
+    pnl_by_day = trades_plot_df.groupby('DayOfWeek')['P&L'].sum().reset_index()
+    
+    days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    pnl_by_day['DayOfWeek'] = pd.Categorical(pnl_by_day['DayOfWeek'], categories=days_order, ordered=True)
+    pnl_by_day = pnl_by_day.sort_values('DayOfWeek')
+
+    # Ensure all days are present for a complete chart
+    all_days_df = pd.DataFrame({'DayOfWeek': pd.Categorical(days_order, categories=days_order, ordered=True)})
+    pnl_by_day = pd.merge(all_days_df, pnl_by_day, on='DayOfWeek', how='left').fillna(0)
+
+
+    fig = px.bar(pnl_by_day, x='DayOfWeek', y='P&L', title=title, labels={'DayOfWeek': 'Day of Week (Entry Time)', 'P&L': 'Total P&L'})
+    fig.update_layout(template=PLOTLY_TEMPLATE, height=400)
+    fig.update_traces(marker_color=['red' if p < 0 else 'green' for p in pnl_by_day['P&L']])
+    return fig
+
+def plot_pnl_by_month(trades_df: pd.DataFrame, title: str = "P&L by Month") -> go.Figure:
+    """
+    Plots the aggregated P&L by month.
+    Args:
+        trades_df (pd.DataFrame): DataFrame of executed trades with 'P&L' and 'EntryTime'.
+        title (str): Title of the plot.
+    Returns:
+        go.Figure: Plotly bar chart figure object.
+    """
+    fig = go.Figure()
+    if trades_df.empty or 'P&L' not in trades_df.columns or 'EntryTime' not in trades_df.columns:
+        logger.warning("P&L by Month: Trades data is empty or missing required columns (P&L, EntryTime).")
+        fig.update_layout(title=title, height=300, template=PLOTLY_TEMPLATE)
+        fig.add_annotation(text="No trade data available for P&L by Month.", showarrow=False)
+        return fig
+
+    trades_plot_df = trades_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
+        trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
+
+    # Similar timezone handling
+    if trades_plot_df['EntryTime'].dt.tz is None:
+        logger.info("P&L by Month: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
+        try:
+            trades_plot_df['EntryTime'] = trades_plot_df['EntryTime'].dt.tz_localize('UTC').dt.tz_convert('America/New_York')
+        except Exception as e:
+            logger.error(f"P&L by Month: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
+
+    trades_plot_df['Month'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m (%B)') # Format like "2023-01 (January)"
+    pnl_by_month = trades_plot_df.groupby('Month')['P&L'].sum().reset_index()
+    
+    # To sort months correctly, we extract year and month number
+    if not pnl_by_month.empty:
+        try:
+            split_month_year = pnl_by_month['Month'].str.split(' ', expand=True)[0].str.split('-', expand=True)
+            pnl_by_month['Year'] = split_month_year[0].astype(int)
+            pnl_by_month['MonthNum'] = split_month_year[1].astype(int)
+            pnl_by_month = pnl_by_month.sort_values(by=['Year', 'MonthNum'])
+        except Exception as e:
+            logger.error(f"P&L by Month: Error parsing year/month for sorting: {e}. Chart may not be sorted correctly.", exc_info=True)
+            # Fallback to sorting by the string 'Month' if parsing fails
+            pnl_by_month = pnl_by_month.sort_values(by='Month')
+
+
+    fig = px.bar(pnl_by_month, x='Month', y='P&L', title=title, labels={'Month': 'Month (Entry Time)', 'P&L': 'Total P&L'})
+    fig.update_layout(template=PLOTLY_TEMPLATE, height=400, xaxis_tickangle=-45)
+    if not pnl_by_month.empty:
+        fig.update_traces(marker_color=['red' if p < 0 else 'green' for p in pnl_by_month['P&L']])
     return fig
