@@ -1,6 +1,7 @@
 # ui/tabs_display.py
 """
 Handles rendering of the main results tabs.
+Includes P&L temporal analysis charts.
 """
 import streamlit as st
 import pandas as pd
@@ -27,13 +28,17 @@ def display_styled_metric_card(column, label, value_raw, is_currency=True, is_pe
         if profit_factor_logic: 
             if value_raw > 1: color_style_str = f"color: {settings.POSITIVE_METRIC_COLOR};"
             elif value_raw < 1 and value_raw != 0 : color_style_str = f"color: {settings.NEGATIVE_METRIC_COLOR};"
+            # Ensure neutral color for profit factor of 1 or 0 (if gross loss is 0 but profit is also 0)
+            elif value_raw == 1 or (value_raw == 0 and not (value_raw > 1 or value_raw < 1)): color_style_str = f"color: {settings.NEUTRAL_METRIC_COLOR};"
+
         elif mdd_logic: 
             if value_raw < 0: color_style_str = f"color: {settings.NEGATIVE_METRIC_COLOR};"
             elif value_raw == 0: color_style_str = f"color: {settings.NEUTRAL_METRIC_COLOR};"
-            else: color_style_str = f"color: {settings.POSITIVE_METRIC_COLOR};"
+            # else: color_style_str = f"color: {settings.POSITIVE_METRIC_COLOR};" # MDD is usually negative or zero
         else: 
             if value_raw > 0: color_style_str = f"color: {settings.POSITIVE_METRIC_COLOR};"
             elif value_raw < 0: color_style_str = f"color: {settings.NEGATIVE_METRIC_COLOR};"
+            else: color_style_str = f"color: {settings.NEUTRAL_METRIC_COLOR};" # For zero values like P&L
     
     column.markdown(f"""<div class="metric-card">
                             <div class="metric-label">{label}</div>
@@ -45,7 +50,7 @@ def render_performance_tab(analysis_mode_ui, initial_capital_ui, selected_ticker
     if st.session_state.backtest_results:
         results_to_display = st.session_state.backtest_results
         performance_summary = results_to_display["performance"]
-        trades_df_display = results_to_display["trades"]
+        trades_df_display = results_to_display["trades"] # This is the key DataFrame for new plots
         equity_curve_display = results_to_display["equity_curve"]
         
         run_params_info = results_to_display.get("params", {})
@@ -66,11 +71,18 @@ def render_performance_tab(analysis_mode_ui, initial_capital_ui, selected_ticker
         if entry_display_val_info:
             summary_details_md += f"<span class='summary-parameter-detail'>Parameters: {entry_display_val_info}</span>"
         elif run_params_info.get("SL") is not None and run_params_info.get("RRR") is not None:
-            summary_details_md += f"<span class='summary-parameter-detail'>Parameters: SL: {float(run_params_info.get('SL')):.2f}, RRR: {float(run_params_info.get('RRR')):.1f}</span>"
+            # Ensure SL and RRR are numbers before formatting
+            sl_val = run_params_info.get('SL')
+            rrr_val = run_params_info.get('RRR')
+            sl_str = f"{float(sl_val):.2f}" if isinstance(sl_val, (int, float)) else str(sl_val)
+            rrr_str = f"{float(rrr_val):.1f}" if isinstance(rrr_val, (int, float)) else str(rrr_val)
+            summary_details_md += f"<span class='summary-parameter-detail'>Parameters: SL: {sl_str}, RRR: {rrr_str}</span>"
+
         summary_details_md += "</div>"
         st.markdown(summary_details_md, unsafe_allow_html=True)
         st.markdown("---")
 
+        # Main performance metrics
         col1, col2, col3 = st.columns(3)
         with col1:
             display_styled_metric_card(col1, "Total P&L", performance_summary.get('Total P&L'), is_currency=True)
@@ -85,6 +97,31 @@ def render_performance_tab(analysis_mode_ui, initial_capital_ui, selected_ticker
             display_styled_metric_card(col3, "Avg. Winning Trade", performance_summary.get('Average Winning Trade'), is_currency=True)
             display_styled_metric_card(col3, "Avg. Losing Trade", performance_summary.get('Average Losing Trade'), is_currency=True)
         
+        # --- P&L Temporal Analysis Section ---
+        if not trades_df_display.empty:
+            st.markdown("---") # Separator
+            st.subheader("P&L Temporal Analysis")
+            
+            # Using an expander to make this section collapsible if preferred
+            with st.expander("View P&L by Time Periods", expanded=True):
+                plot_col1, plot_col2, plot_col3 = st.columns(3)
+                
+                with plot_col1:
+                    fig_pnl_hour = plotting.plot_pnl_by_hour(trades_df_display.copy(), title="P&L by Hour")
+                    st.plotly_chart(fig_pnl_hour, use_container_width=True)
+                
+                with plot_col2:
+                    fig_pnl_day = plotting.plot_pnl_by_day_of_week(trades_df_display.copy(), title="P&L by Day")
+                    st.plotly_chart(fig_pnl_day, use_container_width=True)
+                    
+                with plot_col3:
+                    fig_pnl_month = plotting.plot_pnl_by_month(trades_df_display.copy(), title="P&L by Month")
+                    st.plotly_chart(fig_pnl_month, use_container_width=True)
+        else:
+            st.info("No trade data available for P&L temporal analysis.")
+        st.markdown("---") # Separator
+
+        # Detail tabs for equity curve, trades on price, etc.
         detail_tabs_names = ["📈 Equity Curve", "📊 Trades on Price", "📋 Trade Log"]
         if not st.session_state.signals.empty and analysis_mode_ui != "Walk-Forward Optimization":
             detail_tabs_names.append("🔍 Generated Signals (Last Run)")
@@ -106,19 +143,25 @@ def render_performance_tab(analysis_mode_ui, initial_capital_ui, selected_ticker
 
         with detail_tabs[1]: # Trades on Price
             if not st.session_state.price_data.empty and not trades_df_display.empty:
-                st.plotly_chart(plotting.plot_trades_on_price(st.session_state.price_data, trades_df_display, selected_ticker_name), use_container_width=True)
+                st.plotly_chart(plotting.plot_trades_on_price(st.session_state.price_data, trades_df_display.copy(), selected_ticker_name), use_container_width=True)
             else: st.info("Price/trade data not available for plotting trades on price.")
 
         with detail_tabs[2]: # Trade Log
             if not trades_df_display.empty:
-                st.dataframe(trades_df_display.style.format({col: '{:.2f}' for col in trades_df_display.select_dtypes(include='float').columns}), height=300, use_container_width=True)
+                # Ensure float columns are formatted correctly
+                float_cols_trades = trades_df_display.select_dtypes(include=['float', 'float64', 'float32']).columns
+                format_dict_trades = {col: '{:.2f}' for col in float_cols_trades}
+                st.dataframe(trades_df_display.style.format(format_dict_trades), height=300, use_container_width=True)
             else: st.info("No trades executed.")
 
         idx_offset = 0
         if "🔍 Generated Signals (Last Run)" in detail_tabs_names:
             with detail_tabs[3]:
                 if not st.session_state.signals.empty:
-                    st.dataframe(st.session_state.signals.style.format({col: '{:.2f}' for col in st.session_state.signals.select_dtypes(include='float').columns}), height=300, use_container_width=True)
+                    # Ensure float columns are formatted correctly
+                    float_cols_signals = st.session_state.signals.select_dtypes(include=['float', 'float64', 'float32']).columns
+                    format_dict_signals = {col: '{:.2f}' for col in float_cols_signals}
+                    st.dataframe(st.session_state.signals.style.format(format_dict_signals), height=300, use_container_width=True)
                 else: st.info("No signals generated for the last run.")
             idx_offset = 1
         
@@ -153,7 +196,8 @@ def render_optimization_tab(selected_strategy_name, opt_algo_ui, opt_metric_ui, 
         if opt_algo_ui == "Grid Search" and 'SL Points' in opt_df_display.columns and 'RRR' in opt_df_display.columns:
             st.markdown(f"##### Optimization Heatmap: {opt_metric_ui} (SL vs RRR - Full Period)")
             try:
-                heatmap = plotting.plot_optimization_heatmap(opt_df_display, 'SL Points', 'RRR', opt_metric_ui)
+                # Ensure opt_df_display is passed correctly
+                heatmap = plotting.plot_optimization_heatmap(opt_df_display.copy(), 'SL Points', 'RRR', opt_metric_ui)
                 st.plotly_chart(heatmap, use_container_width=True)
             except Exception as e:
                 logger.error(f"Error generating optimization heatmap: {e}", exc_info=True)
@@ -187,7 +231,10 @@ def render_wfo_tab(selected_strategy_name, opt_algo_ui, ticker_symbol):
 
         st.markdown("##### Aggregated Out-of-Sample (OOS) Trades from WFO")
         if not wfo_oos_trades.empty:
-            st.dataframe(wfo_oos_trades.style.format({col: '{:.2f}' for col in wfo_oos_trades.select_dtypes(include='float').columns}), height=300, use_container_width=True)
+             # Ensure float columns are formatted correctly
+            float_cols_wfo_trades = wfo_oos_trades.select_dtypes(include=['float', 'float64', 'float32']).columns
+            format_dict_wfo_trades = {col: '{:.2f}' for col in float_cols_wfo_trades}
+            st.dataframe(wfo_oos_trades.style.format(format_dict_wfo_trades), height=300, use_container_width=True)
             try:
                 csv_trades = wfo_oos_trades.to_csv(index=False).encode('utf-8')
                 st.download_button("Download WFO OOS Trades CSV", csv_trades, f"{ticker_symbol}_{selected_strategy_name}_wfo_oos_trades.csv", 'text/csv', key='dl_wfo_trades_tabs_v1')
@@ -205,15 +252,26 @@ def render_results_tabs(sidebar_inputs):
     analysis_mode_ui = sidebar_inputs["analysis_mode_ui"]
     
     tabs_to_display = []
-    if st.session_state.backtest_results:
-        tabs_to_display.append("📊 Backtest Performance")
+    # Performance tab is primary; always attempt to show if results might exist
+    # even if it's just to say "no trades"
+    if st.session_state.backtest_results or st.session_state.run_analysis_clicked_count > 0 :
+         tabs_to_display.append("📊 Backtest Performance")
+
     if not st.session_state.optimization_results_df.empty and analysis_mode_ui == "Parameter Optimization":
         tabs_to_display.append("⚙️ Optimization Results (Full Period)")
     if st.session_state.wfo_results and analysis_mode_ui == "Walk-Forward Optimization":
         tabs_to_display.append("🚶 Walk-Forward Analysis")
 
+    if not tabs_to_display and st.session_state.run_analysis_clicked_count == 0:
+        st.info("Configure parameters in the sidebar and click 'Run Analysis' to view results.")
+        return # Exit if no analysis run and no tabs to show
+
+    if not tabs_to_display and st.session_state.run_analysis_clicked_count > 0:
+        st.warning("Analysis was run, but no results were generated to display. This could be due to no trades, data issues, or an error. Check logs if errors are suspected.")
+        return
+
+
     if tabs_to_display:
-        # Use a dynamic key for tabs to force re-render if the set of available tabs changes
         tabs_key = "_".join(tabs_to_display) + f"_{st.session_state.run_analysis_clicked_count}"
         created_tabs = st.tabs(tabs_to_display)
         
@@ -246,9 +304,9 @@ def render_results_tabs(sidebar_inputs):
                     sidebar_inputs["opt_algo_ui"],
                     sidebar_inputs["ticker_symbol"]
                 )
-    elif st.session_state.run_analysis_clicked_count > 0:
+    elif st.session_state.run_analysis_clicked_count > 0 : # Fallback if tabs_to_display somehow ended up empty after run
         st.info("Analysis was run. If results are not displayed, it might be due to no trades or data for the selected parameters, or an error during processing. Check logs if errors are suspected.")
-    else:
-        if not any([st.session_state.backtest_results, not st.session_state.optimization_results_df.empty, st.session_state.wfo_results]):
-            st.info("Configure parameters in the sidebar and click 'Run Analysis' to view results.")
+    # else: # This case should be covered by the initial check
+        # if not any([st.session_state.backtest_results, not st.session_state.optimization_results_df.empty, st.session_state.wfo_results]):
+            # st.info("Configure parameters in the sidebar and click 'Run Analysis' to view results.")
 
