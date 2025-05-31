@@ -99,7 +99,7 @@ def analysis_thread_target(inputs_dict):
         # Signal completion regardless of success or failure
         st.session_state.analysis_running = False
         st.session_state.analysis_complete = True # Mark as complete to trigger result display
-        # Note: We don't call st.experimental_rerun() from the thread.
+        # Note: We don't call st.rerun() from the thread.
         # The main script will handle reruns based on state changes.
 
 def main():
@@ -136,7 +136,7 @@ def main():
             thread = threading.Thread(target=analysis_thread_target, args=(sidebar_inputs.copy(),))
             st.session_state.analysis_thread = thread
             thread.start()
-            st.experimental_rerun() # Rerun to show spinner immediately
+            st.rerun() # Rerun to show spinner immediately
         else:
             logger.info("Run Analysis button clicked, but analysis is already running.")
             st.warning("Analysis is already in progress. Please wait for it to complete.")
@@ -148,15 +148,13 @@ def main():
         st.spinner(text=st.session_state.current_progress_message)
         
         # Periodically check thread status and request rerun to update progress
-        # This creates a polling mechanism.
-        # A more advanced solution might involve callbacks or queues if Streamlit fully supported them with threads.
         if st.session_state.analysis_thread and st.session_state.analysis_thread.is_alive():
             time.sleep(0.5) # Short sleep to allow other interactions and reduce busy-waiting
-            st.experimental_rerun()
+            st.rerun()
         else: # Thread finished (or wasn't started properly)
             st.session_state.analysis_running = False # Ensure flag is updated
             st.session_state.analysis_complete = True
-            st.experimental_rerun() # Rerun to display results or error
+            st.rerun() # Rerun to display results or error
 
     elif st.session_state.analysis_complete: # Analysis is not running, but has completed
         if st.session_state.analysis_error:
@@ -176,10 +174,4 @@ if __name__ == "__main__":
         st.error("PROJECT_ROOT is not correctly defined or accessible. Application cannot start.")
         print("CRITICAL: PROJECT_ROOT not defined or not a directory. Exiting.")
     else:
-        # This is crucial for multiprocessing to work correctly on all platforms,
-        # especially Windows. It ensures child processes can import the main module.
-        # It should be placed inside the `if __name__ == "__main__":` block.
-        # However, given Streamlit's execution model, this specific placement might be
-        # less critical than in a pure multiprocessing script, but it's good practice.
-        # multiprocessing.freeze_support() # Consider if optimizer's multiprocessing needs it
         main()
