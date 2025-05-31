@@ -85,7 +85,7 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_LEVEL = 'INFO' # Change to 'DEBUG' for more verbose logs
 
 # UI
-APP_TITLE = "Multi-Strategy Backtester" # Updated App Title
+APP_TITLE = "Multi-Strategy ICT Backtester Optimizer" # Updated App Title
 
 # Metric Colors
 POSITIVE_METRIC_COLOR = "#28a745" # Green for positive values
