@@ -68,10 +68,12 @@ def plot_wfo_equity_curve(
 def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol: str) -> go.Figure:
     """
     Plots trades (entry and exit points) overlaid on the price candlestick chart.
+    Uses 'ActualEntryPrice' for plotting entries.
 
     Args:
         price_data (pd.DataFrame): OHLC price data.
-        trades (pd.DataFrame): DataFrame of executed trades.
+        trades (pd.DataFrame): DataFrame of executed trades. Must contain 'ActualEntryPrice', 
+                               'EntryTime', 'ExitTime', 'ExitPrice', 'Type'.
         symbol (str): The financial symbol being plotted.
 
     Returns:
@@ -86,34 +88,49 @@ def plot_trades_on_price(price_data: pd.DataFrame, trades: pd.DataFrame, symbol:
                                     close=price_data['Close'],
                                     name=f'{symbol} Price'), row=1, col=1)
     else:
-        fig.add_annotation(text="No price data to display.", showarrow=False, yshift=10)
+        fig.add_annotation(text="No price data to display for trades overlay.", showarrow=False, yshift=10)
 
 
     if not trades.empty:
-        # Ensure 'EntryTime' and 'ExitTime' are datetime objects
         trades_plot_df = trades.copy()
+        # Ensure 'EntryTime' and 'ExitTime' are datetime objects
         if 'EntryTime' in trades_plot_df.columns and not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
             trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
         if 'ExitTime' in trades_plot_df.columns and not pd.api.types.is_datetime64_any_dtype(trades_plot_df['ExitTime']):
             trades_plot_df['ExitTime'] = pd.to_datetime(trades_plot_df['ExitTime'])
 
+        # Check for required columns for plotting trades
+        required_trade_cols = ['EntryTime', 'ActualEntryPrice', 'Type', 'ExitTime', 'ExitPrice']
+        missing_cols = [col for col in required_trade_cols if col not in trades_plot_df.columns]
+        if missing_cols:
+            logger.error(f"Plot Trades: Trades DataFrame is missing required columns: {missing_cols}. Cannot plot trades accurately.")
+            fig.add_annotation(text=f"Trade data incomplete (missing: {', '.join(missing_cols)}). Cannot plot trades.", showarrow=False, yshift=-20)
+            fig.update_layout(title=f'Trades for {symbol} (Data Incomplete)', xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, template=PLOTLY_TEMPLATE, height=600, hovermode="x unified")
+            return fig
+
 
         long_entries = trades_plot_df[trades_plot_df['Type'] == 'Long']
         if not long_entries.empty:
-            fig.add_trace(go.Scatter(x=long_entries['EntryTime'], y=long_entries['EntryPrice'],
+            fig.add_trace(go.Scatter(x=long_entries['EntryTime'], y=long_entries['ActualEntryPrice'], # Changed to ActualEntryPrice
                                      mode='markers', name='Long Entry',
                                      marker=dict(color='green', size=10, symbol='triangle-up')), row=1, col=1)
         
         short_entries = trades_plot_df[trades_plot_df['Type'] == 'Short']
         if not short_entries.empty:
-            fig.add_trace(go.Scatter(x=short_entries['EntryTime'], y=short_entries['EntryPrice'],
+            fig.add_trace(go.Scatter(x=short_entries['EntryTime'], y=short_entries['ActualEntryPrice'], # Changed to ActualEntryPrice
                                      mode='markers', name='Short Entry',
                                      marker=dict(color='red', size=10, symbol='triangle-down')), row=1, col=1)
         
+        # Exit markers (assuming 'ExitTime' and 'ExitPrice' are correctly populated)
         if 'ExitTime' in trades_plot_df.columns and 'ExitPrice' in trades_plot_df.columns:
              fig.add_trace(go.Scatter(x=trades_plot_df['ExitTime'], y=trades_plot_df['ExitPrice'],
                                      mode='markers', name='Exit',
                                      marker=dict(color='blue', size=8, symbol='square')), row=1, col=1)
+    else:
+        logger.info("Plot Trades: No trades to plot.")
+        # Optionally add an annotation if no trades
+        # fig.add_annotation(text="No trades executed.", showarrow=False, yshift=0)
+
 
     fig.update_layout(title=f'Trades for {symbol}', xaxis_title="Date", yaxis_title="Price", xaxis_rangeslider_visible=False, template=PLOTLY_TEMPLATE, height=600, hovermode="x unified")
     return fig
@@ -249,18 +266,11 @@ def plot_pnl_by_day_of_week(trades_df: pd.DataFrame, title: str = "P&L by Day of
     
     days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     
-    # Create a DataFrame with all days of the week in the correct order
     all_days_df = pd.DataFrame({'DayOfWeek': pd.Categorical(days_order, categories=days_order, ordered=True)})
     
-    # Merge with the P&L data
     pnl_by_day = pd.merge(all_days_df, pnl_by_day_grouped, on='DayOfWeek', how='left')
     
-    # Fill NaN P&L values with 0 (for days with no trades)
     pnl_by_day['P&L'] = pnl_by_day['P&L'].fillna(0)
-    
-    # The 'DayOfWeek' column is already categorical and sorted from all_days_df
-    # If sorting is still needed after merge (should not be if all_days_df is primary)
-    # pnl_by_day = pnl_by_day.sort_values('DayOfWeek')
 
 
     fig = px.bar(pnl_by_day, x='DayOfWeek', y='P&L', title=title, labels={'DayOfWeek': 'Day of Week (Entry Time)', 'P&L': 'Total P&L'})
@@ -295,8 +305,8 @@ def plot_pnl_by_month(trades_df: pd.DataFrame, title: str = "P&L by Month") -> g
         except Exception as e:
             logger.error(f"P&L by Month: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
 
-    trades_plot_df['MonthSort'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m') # For sorting
-    trades_plot_df['MonthDisplay'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m (%B)') # For display
+    trades_plot_df['MonthSort'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m') 
+    trades_plot_df['MonthDisplay'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m (%B)') 
     
     pnl_by_month = trades_plot_df.groupby(['MonthSort', 'MonthDisplay'])['P&L'].sum().reset_index()
     pnl_by_month = pnl_by_month.sort_values(by='MonthSort')
