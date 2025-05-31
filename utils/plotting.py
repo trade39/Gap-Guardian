@@ -196,23 +196,19 @@ def plot_pnl_by_hour(trades_df: pd.DataFrame, title: str = "P&L by Hour of Day")
     if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
         trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
     
-    # Ensure EntryTime is timezone-aware if it's not already.
-    # This depends on your application's timezone strategy. If EntryTime is already localized (e.g., to NY), this might not be needed.
-    # If it's naive, you might want to localize it to a specific timezone (e.g., 'America/New_York')
-    # For now, we assume it's correctly localized or naive UTC that can be converted.
     if trades_plot_df['EntryTime'].dt.tz is None:
         logger.info("P&L by Hour: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
         try:
             trades_plot_df['EntryTime'] = trades_plot_df['EntryTime'].dt.tz_localize('UTC').dt.tz_convert('America/New_York')
         except Exception as e:
             logger.error(f"P&L by Hour: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
-            # Proceeding with naive time, which might be misleading if data spans DST changes or multiple timezones.
 
     trades_plot_df['Hour'] = trades_plot_df['EntryTime'].dt.hour
     pnl_by_hour = trades_plot_df.groupby('Hour')['P&L'].sum().reset_index()
     
     all_hours = pd.DataFrame({'Hour': range(24)})
-    pnl_by_hour = pd.merge(all_hours, pnl_by_hour, on='Hour', how='left').fillna(0)
+    pnl_by_hour = pd.merge(all_hours, pnl_by_hour, on='Hour', how='left')
+    pnl_by_hour['P&L'] = pnl_by_hour['P&L'].fillna(0) # Fill P&L NaNs with 0
     pnl_by_hour = pnl_by_hour.sort_values(by='Hour')
 
     fig = px.bar(pnl_by_hour, x='Hour', y='P&L', title=title, labels={'Hour': 'Hour of Day (Entry Time)', 'P&L': 'Total P&L'})
@@ -240,7 +236,6 @@ def plot_pnl_by_day_of_week(trades_df: pd.DataFrame, title: str = "P&L by Day of
     if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
         trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
 
-    # Similar timezone handling as plot_pnl_by_hour
     if trades_plot_df['EntryTime'].dt.tz is None:
         logger.info("P&L by Day: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
         try:
@@ -250,15 +245,22 @@ def plot_pnl_by_day_of_week(trades_df: pd.DataFrame, title: str = "P&L by Day of
 
 
     trades_plot_df['DayOfWeek'] = trades_plot_df['EntryTime'].dt.day_name()
-    pnl_by_day = trades_plot_df.groupby('DayOfWeek')['P&L'].sum().reset_index()
+    pnl_by_day_grouped = trades_plot_df.groupby('DayOfWeek')['P&L'].sum().reset_index()
     
     days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    pnl_by_day['DayOfWeek'] = pd.Categorical(pnl_by_day['DayOfWeek'], categories=days_order, ordered=True)
-    pnl_by_day = pnl_by_day.sort_values('DayOfWeek')
-
-    # Ensure all days are present for a complete chart
+    
+    # Create a DataFrame with all days of the week in the correct order
     all_days_df = pd.DataFrame({'DayOfWeek': pd.Categorical(days_order, categories=days_order, ordered=True)})
-    pnl_by_day = pd.merge(all_days_df, pnl_by_day, on='DayOfWeek', how='left').fillna(0)
+    
+    # Merge with the P&L data
+    pnl_by_day = pd.merge(all_days_df, pnl_by_day_grouped, on='DayOfWeek', how='left')
+    
+    # Fill NaN P&L values with 0 (for days with no trades)
+    pnl_by_day['P&L'] = pnl_by_day['P&L'].fillna(0)
+    
+    # The 'DayOfWeek' column is already categorical and sorted from all_days_df
+    # If sorting is still needed after merge (should not be if all_days_df is primary)
+    # pnl_by_day = pnl_by_day.sort_values('DayOfWeek')
 
 
     fig = px.bar(pnl_by_day, x='DayOfWeek', y='P&L', title=title, labels={'DayOfWeek': 'Day of Week (Entry Time)', 'P&L': 'Total P&L'})
@@ -286,7 +288,6 @@ def plot_pnl_by_month(trades_df: pd.DataFrame, title: str = "P&L by Month") -> g
     if not pd.api.types.is_datetime64_any_dtype(trades_plot_df['EntryTime']):
         trades_plot_df['EntryTime'] = pd.to_datetime(trades_plot_df['EntryTime'])
 
-    # Similar timezone handling
     if trades_plot_df['EntryTime'].dt.tz is None:
         logger.info("P&L by Month: 'EntryTime' is timezone-naive. Assuming UTC and converting to NY for display.")
         try:
@@ -294,23 +295,14 @@ def plot_pnl_by_month(trades_df: pd.DataFrame, title: str = "P&L by Month") -> g
         except Exception as e:
             logger.error(f"P&L by Month: Error localizing/converting naive EntryTime: {e}. Proceeding with naive time.", exc_info=True)
 
-    trades_plot_df['Month'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m (%B)') # Format like "2023-01 (January)"
-    pnl_by_month = trades_plot_df.groupby('Month')['P&L'].sum().reset_index()
+    trades_plot_df['MonthSort'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m') # For sorting
+    trades_plot_df['MonthDisplay'] = trades_plot_df['EntryTime'].dt.strftime('%Y-%m (%B)') # For display
     
-    # To sort months correctly, we extract year and month number
-    if not pnl_by_month.empty:
-        try:
-            split_month_year = pnl_by_month['Month'].str.split(' ', expand=True)[0].str.split('-', expand=True)
-            pnl_by_month['Year'] = split_month_year[0].astype(int)
-            pnl_by_month['MonthNum'] = split_month_year[1].astype(int)
-            pnl_by_month = pnl_by_month.sort_values(by=['Year', 'MonthNum'])
-        except Exception as e:
-            logger.error(f"P&L by Month: Error parsing year/month for sorting: {e}. Chart may not be sorted correctly.", exc_info=True)
-            # Fallback to sorting by the string 'Month' if parsing fails
-            pnl_by_month = pnl_by_month.sort_values(by='Month')
+    pnl_by_month = trades_plot_df.groupby(['MonthSort', 'MonthDisplay'])['P&L'].sum().reset_index()
+    pnl_by_month = pnl_by_month.sort_values(by='MonthSort')
 
 
-    fig = px.bar(pnl_by_month, x='Month', y='P&L', title=title, labels={'Month': 'Month (Entry Time)', 'P&L': 'Total P&L'})
+    fig = px.bar(pnl_by_month, x='MonthDisplay', y='P&L', title=title, labels={'MonthDisplay': 'Month (Entry Time)', 'P&L': 'Total P&L'})
     fig.update_layout(template=PLOTLY_TEMPLATE, height=400, xaxis_tickangle=-45)
     if not pnl_by_month.empty:
         fig.update_traces(marker_color=['red' if p < 0 else 'green' for p in pnl_by_month['P&L']])
