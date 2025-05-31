@@ -1,13 +1,14 @@
 # services/backtester.py
 """
 Executes the backtest by simulating trades based on generated signals
-and calculating profit/loss and equity curve, including transaction costs.
+and calculating profit/loss, equity curve, and advanced performance metrics.
 """
 import pandas as pd
 import numpy as np
 from utils.logger import get_logger
-# Assuming settings are imported for default values if needed, though not directly used here
-# from config import settings
+from config import settings # For RISK_FREE_RATE, TRADING_DAYS_PER_YEAR
+# Assuming metrics_calculator is accessible for Sharpe Ratio
+from services.optimizer.metrics_calculator import _calculate_daily_returns, calculate_sharpe_ratio 
 
 logger = get_logger(__name__)
 
@@ -36,25 +37,14 @@ def run_backtest(
     signals: pd.DataFrame,
     initial_capital: float,
     risk_per_trade_percent: float,
-    stop_loss_points_config: float, # This is the risk distance for position sizing
+    stop_loss_points_config: float, 
     data_interval_str: str,
-    # New parameters for transaction costs
-    commission_type: str = "None", # "None", "Fixed per Trade", "Percentage of Trade Value"
-    commission_rate: float = 0.0,  # Actual rate (e.g., 1.0 for fixed, 0.001 for 0.1%)
-    slippage_points: float = 0.0   # Points per side
+    commission_type: str = "None", 
+    commission_rate: float = 0.0,  
+    slippage_points: float = 0.0   
     ) -> tuple[pd.DataFrame, pd.Series, dict]:
     """
-    Runs the backtest simulation including commission and slippage.
-    Args:
-        price_data (pd.DataFrame): OHLCV data.
-        signals (pd.DataFrame): Trade signals with 'EntryPrice', 'SL', 'TP', 'SignalType'.
-        initial_capital (float): Starting capital.
-        risk_per_trade_percent (float): Risk per trade as a percentage of current capital.
-        stop_loss_points_config (float): The distance in points defining the risk for position sizing.
-        data_interval_str (str): Interval of the price data (e.g., "15m").
-        commission_type (str): Type of commission.
-        commission_rate (float): Rate for commission (actual value, not percentage for "Percentage" type).
-        slippage_points (float): Slippage in points applied per side of the trade.
+    Runs the backtest simulation including commission, slippage, and advanced metrics.
     """
     if price_data.empty:
         logger.warning("Price data is empty. Cannot run backtest.")
@@ -72,11 +62,9 @@ def run_backtest(
 
     active_trade = None
     for i, (timestamp, current_bar) in enumerate(price_data.iterrows()):
-        # --- Check for exits before new entries ---
         if active_trade:
             exit_reason, exit_price_raw = None, None
             
-            # Determine raw exit price based on SL/TP hit by current_bar's Low/High
             if active_trade['Type'] == 'Long':
                 if current_bar['Low'] <= active_trade['SL']: 
                     exit_price_raw, exit_reason = active_trade['SL'], 'Stop Loss'
@@ -89,41 +77,36 @@ def run_backtest(
                     exit_price_raw, exit_reason = active_trade['TP'], 'Take Profit'
             
             if exit_reason:
-                # Apply slippage to exit
                 actual_exit_price = exit_price_raw
                 slippage_on_exit = 0
-                if active_trade['Type'] == 'Long': # Selling to exit
+                if active_trade['Type'] == 'Long': 
                     actual_exit_price -= slippage_points
                     slippage_on_exit = -slippage_points
-                elif active_trade['Type'] == 'Short': # Buying to cover
+                elif active_trade['Type'] == 'Short': 
                     actual_exit_price += slippage_points
                     slippage_on_exit = slippage_points
 
-                # Calculate P&L before commission
                 pnl_before_commission = (actual_exit_price - active_trade['ActualEntryPrice']) * active_trade['PositionSize'] \
                                         if active_trade['Type'] == 'Long' else \
                                         (active_trade['ActualEntryPrice'] - actual_exit_price) * active_trade['PositionSize']
 
-                # Calculate commission (applied per side, so entry commission already accounted for if any)
-                # Here we calculate exit commission. If commission_rate is for round-trip, adjust logic.
-                # Assuming commission_rate is per side for Fixed and Percentage types.
                 commission_on_exit = 0
                 if commission_type == "Fixed per Trade":
                     commission_on_exit = commission_rate 
                 elif commission_type == "Percentage of Trade Value":
                     exit_trade_value = actual_exit_price * active_trade['PositionSize']
-                    commission_on_exit = abs(exit_trade_value * commission_rate) # commission_rate is already decimal
+                    commission_on_exit = abs(exit_trade_value * commission_rate) 
 
                 total_commission_for_trade = active_trade.get('CommissionOnEntry', 0) + commission_on_exit
-                pnl_after_commission = pnl_before_commission - commission_on_exit # Only subtract exit commission here
-
-                current_capital += pnl_after_commission # Capital was already adjusted for entry commission
+                # P&L for this exit event (already accounts for entry commission via current_capital)
+                pnl_this_event = pnl_before_commission - commission_on_exit 
+                current_capital += pnl_this_event
                 
                 active_trade.update({
                     'ExitPrice': actual_exit_price, 
                     'ExitTime': timestamp, 
-                    'P&L': pnl_after_commission + active_trade.get('PnlAdjustEntryComm',0), # Total P&L for the trade
-                    'RawP&L': pnl_before_commission + active_trade.get('RawPnlAdjustEntryComm',0), # Total Raw P&L
+                    'P&L': pnl_before_commission - total_commission_for_trade, # Net P&L for the trade
+                    'RawP&L': pnl_before_commission, # P&L after slippage, before this exit's commission
                     'ExitReason': exit_reason,
                     'SlippageOnExit': slippage_on_exit,
                     'CommissionOnExit': commission_on_exit,
@@ -134,15 +117,14 @@ def run_backtest(
                 logger.debug(f"Trade closed: {active_trade['Type']} at {actual_exit_price:.2f} ({exit_reason}). Net P&L: {active_trade['P&L']:.2f}. Capital: {current_capital:.2f}")
                 active_trade = None
 
-        # --- Check for new entries ---
         if not active_trade and timestamp in signals.index:
-            signal_data = signals.loc[signals.index == timestamp] # Use boolean indexing for robustness
+            signal_data = signals.loc[signals.index == timestamp] 
             if isinstance(signal_data, pd.DataFrame) and not signal_data.empty: 
-                signal = signal_data.iloc[0] # Take the first signal if multiple at same timestamp
+                signal = signal_data.iloc[0]
             elif isinstance(signal_data, pd.Series):
                 signal = signal_data
             else:
-                continue # No valid signal
+                continue
 
             risk_amount_trade = current_capital * (risk_per_trade_percent / 100.0)
             if stop_loss_points_config <= 0:
@@ -154,50 +136,44 @@ def run_backtest(
                 logger.warning(f"Calculated position size is non-positive ({position_size:.4f}). Skipping trade at {timestamp}.")
                 continue
 
-            # Apply slippage to entry
             entry_price_signal = signal['EntryPrice']
             actual_entry_price = entry_price_signal
             slippage_on_entry = 0
-            if signal['SignalType'] == 'Long': # Buying to enter
+            if signal['SignalType'] == 'Long': 
                 actual_entry_price += slippage_points
                 slippage_on_entry = slippage_points
-            elif signal['SignalType'] == 'Short': # Selling to enter
+            elif signal['SignalType'] == 'Short': 
                 actual_entry_price -= slippage_points
-                slippage_on_entry = -slippage_points # Negative for short entry slippage
+                slippage_on_entry = -slippage_points 
 
-            # Calculate commission on entry
             commission_on_entry = 0
             if commission_type == "Fixed per Trade":
                 commission_on_entry = commission_rate
             elif commission_type == "Percentage of Trade Value":
                 entry_trade_value = actual_entry_price * position_size
-                commission_on_entry = abs(entry_trade_value * commission_rate) # commission_rate is decimal
+                commission_on_entry = abs(entry_trade_value * commission_rate)
 
-            # Adjust capital immediately for entry commission
-            current_capital -= commission_on_entry
-            equity_points[timestamp] = current_capital # Log equity change due to entry commission
+            current_capital -= commission_on_entry # Deduct entry commission from capital
+            equity_points[timestamp] = current_capital 
 
             active_trade = {
                 'EntryTime': timestamp, 
                 'SignalEntryPrice': entry_price_signal,
                 'ActualEntryPrice': actual_entry_price, 
                 'Type': signal['SignalType'],
-                'SL': signal['SL'], # SL/TP are based on signal price, not actual fill
+                'SL': signal['SL'], 
                 'TP': signal['TP'], 
                 'PositionSize': position_size,
                 'InitialRiskAmount': risk_amount_trade, 
                 'StopLossPointsSizing': stop_loss_points_config,
                 'SlippageOnEntry': slippage_on_entry,
                 'CommissionOnEntry': commission_on_entry,
-                'PnlAdjustEntryComm': -commission_on_entry, # P&L impact of entry commission
-                'RawPnlAdjustEntryComm': 0 # Raw P&L is not affected by entry commission directly, but net P&L is
+                # 'PnlAdjustEntryComm' and 'RawPnlAdjustEntryComm' are removed as P&L is calculated at exit
             }
             logger.debug(f"Trade opened: {active_trade['Type']} at signal {entry_price_signal:.2f} (actual {actual_entry_price:.2f}) on {timestamp}. PosSize: {position_size:.4f}. Entry Comm: {commission_on_entry:.2f}. Capital after Entry Comm: {current_capital:.2f}")
     
-    # --- Handle trade open at end of data ---
     if active_trade:
         last_bar_close = price_data['Close'].iloc[-1]
-        # Apply slippage to this forced exit
         actual_exit_price_eod = last_bar_close
         slippage_on_eod_exit = 0
         if active_trade['Type'] == 'Long':
@@ -219,15 +195,14 @@ def run_backtest(
             commission_on_eod_exit = abs(exit_trade_value_eod * commission_rate)
 
         total_commission_for_trade_eod = active_trade.get('CommissionOnEntry', 0) + commission_on_eod_exit
-        pnl_after_commission_eod = pnl_before_commission_eod - commission_on_eod_exit
-
-        current_capital += pnl_after_commission_eod # Capital was adjusted for entry commission
+        pnl_this_event_eod = pnl_before_commission_eod - commission_on_eod_exit
+        current_capital += pnl_this_event_eod
 
         active_trade.update({
             'ExitPrice': actual_exit_price_eod, 
             'ExitTime': price_data.index[-1], 
-            'P&L': pnl_after_commission_eod + active_trade.get('PnlAdjustEntryComm',0),
-            'RawP&L': pnl_before_commission_eod + active_trade.get('RawPnlAdjustEntryComm',0),
+            'P&L': pnl_before_commission_eod - total_commission_for_trade_eod, # Net P&L for the trade
+            'RawP&L': pnl_before_commission_eod, # P&L after slippage, before this exit's commission
             'ExitReason': 'End of Data',
             'SlippageOnExit': slippage_on_eod_exit,
             'CommissionOnExit': commission_on_eod_exit,
@@ -243,64 +218,43 @@ def run_backtest(
             if col in trades_df.columns:
                  trades_df[col] = pd.to_datetime(trades_df[col])
 
-    # Construct final equity series
     if not price_data.empty:
-        if price_data.index[-1] not in equity_points: # Ensure last capital point is there
+        if not equity_points or price_data.index[-1] not in equity_points:
             equity_points[price_data.index[-1]] = current_capital
         
         equity_series_raw = pd.Series(equity_points).sort_index()
         equity_series = equity_series_raw.reindex(price_data.index, method='ffill')
         
         if equity_series.empty or pd.isna(equity_series.iloc[0]):
-             temp_equity = pd.Series(index=price_data.index, dtype=float)
-             temp_equity.iloc[0] = initial_capital # Start with initial capital
-             # If equity_points has data (e.g. commissions changed capital before first trade bar)
-             # we need to merge carefully or ensure the first point reflects this.
-             # For now, this covers the case of no trades or trades starting later.
-             equity_series = temp_equity.ffill() 
-             if not equity_series_raw.empty:
+             first_timestamp = price_data.index.min()
+             equity_series.loc[first_timestamp] = initial_capital # Ensure it starts with initial capital
+             equity_series = equity_series.ffill() 
+             if not equity_series_raw.empty: # Re-apply actual points if they existed
                  equity_series.update(equity_series_raw) 
-                 equity_series = equity_series.ffill()   
-
-        if not equity_series.empty and equity_series.index.min() == price_data.index.min() and pd.isna(equity_series.iloc[0]):
-            # If the very first point is still NaN after reindex/ffill, it means no trades/commissions affected it.
-            # It should be initial_capital.
-            # However, if commissions were applied at t0, equity_points[t0] would exist.
-            # This handles the case where price_data starts, and no trades/commissions happen on the first bar.
-            first_price_data_timestamp = price_data.index.min()
-            if first_price_data_timestamp not in equity_points: # If no explicit equity point at t0
-                 equity_series.loc[first_price_data_timestamp] = initial_capital
-                 equity_series = equity_series.sort_index().ffill()
-
-
+                 equity_series = equity_series.ffill()
     else: 
         equity_series = pd.Series([initial_capital], index=[pd.Timestamp('1970-01-01', tz='UTC')], dtype=float)
     
     equity_series.name = "Equity"
 
-    # Calculate performance metrics
+    # --- Performance Metrics Calculation ---
     performance = {
         'Final Capital': current_capital, 'Total Trades': 0, 'Total P&L': 0.0, 
         'Win Rate': 0.0, 'Profit Factor': 0.0, 'Max Drawdown (%)': 0.0,
         'Average Trade P&L': np.nan, 'Average Winning Trade': np.nan, 'Average Losing Trade': np.nan,
-        'Total Commissions Paid': 0.0, 'Total Slippage Impact': 0.0
+        'Total Commissions Paid': 0.0, 'Total Slippage Impact (approx)': 0.0, # Renamed
+        'Sharpe Ratio (Annualized)': np.nan, 'Expected Value': np.nan, 'Recovery Factor': np.nan
     }
+
     if not trades_df.empty:
         performance['Total Trades'] = len(trades_df)
-        performance['Total P&L'] = trades_df['P&L'].sum() # Net P&L
+        performance['Total P&L'] = trades_df['P&L'].sum() # Net P&L after all costs
         
-        # Gross Profit and Loss based on Raw P&L (before exit commission, but after slippage)
-        # To calculate Profit Factor more traditionally (gross profit / gross loss before any costs)
-        # one might use a P&L column that excludes all commissions.
-        # For now, using the P&L column that includes entry commission impact but not exit.
-        # Let's use 'RawP&L' which is P&L after slippage but before any commissions.
-        if 'RawP&L' in trades_df.columns:
-            gross_profit_raw = trades_df[trades_df['RawP&L'] > 0]['RawP&L'].sum()
-            gross_loss_raw = abs(trades_df[trades_df['RawP&L'] < 0]['RawP&L'].sum())
-        else: # Fallback if RawP&L is not there (should be)
-            gross_profit_raw = trades_df[trades_df['P&L'] > 0]['P&L'].sum() # This would be net if RawP&L missing
-            gross_loss_raw = abs(trades_df[trades_df['P&L'] < 0]['P&L'].sum())
-
+        # Use RawP&L (after slippage, before exit commission) for Profit Factor calculation if available
+        # This gives a sense of edge before per-trade fixed costs.
+        raw_pnl_col = 'RawP&L' if 'RawP&L' in trades_df.columns else 'P&L' # Fallback to P&L
+        gross_profit_raw = trades_df[trades_df[raw_pnl_col] > 0][raw_pnl_col].sum()
+        gross_loss_raw = abs(trades_df[trades_df[raw_pnl_col] < 0][raw_pnl_col].sum())
 
         performance['Winning Trades'] = len(trades_df[trades_df['P&L'] > 0])
         performance['Losing Trades'] = len(trades_df[trades_df['P&L'] < 0])
@@ -308,27 +262,65 @@ def run_backtest(
         
         performance['Profit Factor'] = (gross_profit_raw / gross_loss_raw) if gross_loss_raw > 0 else np.inf if gross_profit_raw > 0 else 0.0
         
+        avg_win_amount = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if performance['Winning Trades'] > 0 else 0.0
+        avg_loss_amount = abs(trades_df[trades_df['P&L'] < 0]['P&L'].mean()) if performance['Losing Trades'] > 0 else 0.0
+        
         performance['Average Trade P&L'] = trades_df['P&L'].mean() if performance['Total Trades'] > 0 else np.nan
-        performance['Average Winning Trade'] = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if performance['Winning Trades'] > 0 else np.nan
-        performance['Average Losing Trade'] = trades_df[trades_df['P&L'] < 0]['P&L'].mean() if performance['Losing Trades'] > 0 else np.nan
+        performance['Average Winning Trade'] = avg_win_amount
+        performance['Average Losing Trade'] = -avg_loss_amount # Typically displayed as negative
+
+        if performance['Total Trades'] > 0:
+            win_rate_decimal = performance['Win Rate'] / 100.0
+            loss_rate_decimal = 1.0 - win_rate_decimal if performance['Total Trades'] > performance['Winning Trades'] + performance['Losing Trades'] else (performance['Losing Trades'] / performance['Total Trades'])
+            performance['Expected Value'] = (win_rate_decimal * avg_win_amount) - (loss_rate_decimal * avg_loss_amount)
         
         performance['Total Commissions Paid'] = trades_df['TotalCommission'].sum() if 'TotalCommission' in trades_df.columns else 0.0
-        total_slippage_impact_val = 0
-        if 'SlippageOnEntry' in trades_df.columns:
-            total_slippage_impact_val += (trades_df['SlippageOnEntry'] * trades_df['PositionSize'] * np.where(trades_df['Type'] == 'Long', -1, 1)).sum()
-        if 'SlippageOnExit' in trades_df.columns:
-            total_slippage_impact_val += (trades_df['SlippageOnExit'] * trades_df['PositionSize'] * np.where(trades_df['Type'] == 'Long', -1, 1)).sum()
-        performance['Total Slippage Impact'] = total_slippage_impact_val
+        
+        # Approximate total slippage cost
+        total_slippage_cost = 0
+        if 'SlippageOnEntry' in trades_df.columns and 'PositionSize' in trades_df.columns:
+            # Slippage cost is value of slippage_points * position_size
+            # For long entry, positive slippage_points means higher entry price (cost)
+            # For short entry, negative slippage_points means lower entry price (cost)
+            total_slippage_cost -= (trades_df['SlippageOnEntry'] * trades_df['PositionSize']).sum()
+        if 'SlippageOnExit' in trades_df.columns and 'PositionSize' in trades_df.columns:
+            # For long exit, negative slippage_points means lower exit price (cost)
+            # For short exit, positive slippage_points means higher exit price (cost)
+            total_slippage_cost -= (trades_df['SlippageOnExit'] * trades_df['PositionSize']).sum()
+        performance['Total Slippage Impact (approx)'] = total_slippage_cost
 
 
+        # Max Drawdown Calculation (from equity curve)
+        abs_max_drawdown_value = 0.0
         if not equity_series.empty and equity_series.notna().any():
-            cumulative_max = equity_series.cummax()
-            drawdown = (equity_series - cumulative_max) / cumulative_max
-            drawdown.replace([np.inf, -np.inf], np.nan, inplace=True) # Handle division by zero if equity hits 0
-            mdd_val = drawdown.min() * 100
-            performance['Max Drawdown (%)'] = mdd_val if pd.notna(mdd_val) and not drawdown.empty else 0.0
+            cumulative_max_equity = equity_series.cummax()
+            drawdown_series = cumulative_max_equity - equity_series # Absolute drawdown values
+            abs_max_drawdown_value = drawdown_series.max() if drawdown_series.notna().any() and not drawdown_series.empty else 0.0
+            
+            drawdown_percent_series = (equity_series - cumulative_max_equity) / cumulative_max_equity
+            drawdown_percent_series.replace([np.inf, -np.inf], np.nan, inplace=True)
+            mdd_percent_val = drawdown_percent_series.min() * 100
+            performance['Max Drawdown (%)'] = mdd_percent_val if pd.notna(mdd_percent_val) and not drawdown_percent_series.empty else 0.0
         else: 
             performance['Max Drawdown (%)'] = 0.0
+            abs_max_drawdown_value = 0.0 # Should be initial_capital if P&L is negative
+
+        if abs_max_drawdown_value > 0 and performance['Total P&L'] > 0 : # Avoid division by zero or meaningless ratio
+            performance['Recovery Factor'] = performance['Total P&L'] / abs_max_drawdown_value
+        elif performance['Total P&L'] > 0 and abs_max_drawdown_value == 0: # Positive P&L with no drawdown
+             performance['Recovery Factor'] = np.inf
+        else:
+            performance['Recovery Factor'] = 0.0
+
+
+        # Sharpe Ratio Calculation
+        daily_returns = _calculate_daily_returns(equity_series.copy()) # ensure copy
+        performance['Sharpe Ratio (Annualized)'] = calculate_sharpe_ratio(
+            daily_returns, 
+            risk_free_rate=settings.RISK_FREE_RATE, 
+            trading_days_per_year=settings.TRADING_DAYS_PER_YEAR
+        )
     
     logger.info(f"Backtest complete. Final Capital: {current_capital:,.2f}. Net P&L: {performance.get('Total P&L', 0):,.2f}. Trades: {performance['Total Trades']}.")
+    logger.info(f"New Metrics: Sharpe={performance.get('Sharpe Ratio (Annualized)', np.nan):.2f}, Expectancy=${performance.get('Expected Value', np.nan):.2f}, RecoveryFactor={performance.get('Recovery Factor', np.nan):.2f}")
     return trades_df, equity_series, performance
