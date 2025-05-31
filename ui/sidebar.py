@@ -125,25 +125,31 @@ def render_sidebar():
             default_start_days_ago = min(settings.MAX_SHORT_INTRADAY_DAYS - 5 if settings.MAX_SHORT_INTRADAY_DAYS else 15,
                                          max_history_limit_days - 1 if max_history_limit_days else 15)
         else:
-            default_start_days_ago = 365 if ui_current_interval != "1wk" else 30*7
-        default_start_date_value = today - timedelta(days=default_start_days_ago)
-        if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
-        max_possible_start_date = today - timedelta(days=1)
-        if default_start_date_value > max_possible_start_date: default_start_date_value = max_possible_start_date
-        if default_start_date_value < min_allowable_start_date_for_ui: default_start_date_value = min_allowable_start_date_for_ui
+            default_start_days_ago = 365 if ui_current_interval != "1wk" else 30*7 # Approx 10 years for daily, 30 weeks for weekly
+        
+        # Ensure default_start_date_value is not before min_allowable_start_date_for_ui
+        default_start_date_value_candidate = today - timedelta(days=default_start_days_ago)
+        default_start_date_value = max(default_start_date_value_candidate, min_allowable_start_date_for_ui)
+
+        max_possible_start_date = today - timedelta(days=1) # Cannot start today
+        # Ensure default_start_date_value is not after max_possible_start_date
+        default_start_date_value = min(default_start_date_value, max_possible_start_date)
+
 
         start_date_ui = st.date_input(
             "Start Date:", value=default_start_date_value, min_value=min_allowable_start_date_for_ui,
-            max_value=max_possible_start_date, key=f"start_date_sidebar_{ui_current_interval}_v2",
+            max_value=max_possible_start_date, key=f"start_date_sidebar_{ui_current_interval}_v2", # Unique key
             help=f"Start date for historical data. {date_input_help_suffix}"
         )
+        
         min_end_date_value_ui = start_date_ui + timedelta(days=1) if start_date_ui else min_allowable_start_date_for_ui + timedelta(days=1)
         default_end_date_value_ui = today
         if default_end_date_value_ui < min_end_date_value_ui: default_end_date_value_ui = min_end_date_value_ui
-        if default_end_date_value_ui > today: default_end_date_value_ui = today
+        if default_end_date_value_ui > today: default_end_date_value_ui = today # Cannot be in the future
+        
         end_date_ui = st.date_input(
             "End Date:", value=default_end_date_value_ui, min_value=min_end_date_value_ui,
-            max_value=today, key=f"end_date_sidebar_{ui_current_interval}_v2",
+            max_value=today, key=f"end_date_sidebar_{ui_current_interval}_v2", # Unique key
             help=f"End date for historical data. {date_input_help_suffix}"
         )
 
@@ -152,18 +158,61 @@ def render_sidebar():
         initial_capital_ui = st.number_input("Initial Capital ($):", min_value=1000.0, value=settings.DEFAULT_INITIAL_CAPITAL, step=1000.0, format="%.2f", key="ic_sidebar_v2")
         risk_per_trade_percent_ui = st.number_input("Risk per Trade (%):", min_value=0.1, max_value=10.0, value=settings.DEFAULT_RISK_PER_TRADE_PERCENT, step=0.1, format="%.1f", key="rpt_sidebar_v2")
 
+    # --- Section 2.5: Transaction Cost Assumptions ---
+    with st.sidebar.expander("💸 Transaction Cost Assumptions", expanded=False):
+        commission_type_options = ["None", "Fixed per Trade", "Percentage of Trade Value"]
+        # Get index for default commission type
+        try:
+            default_commission_index = commission_type_options.index(settings.DEFAULT_COMMISSION_TYPE)
+        except ValueError:
+            default_commission_index = 0 # Default to "None" if not found
+
+        commission_type_ui = st.selectbox(
+            "Commission Type:",
+            options=commission_type_options,
+            index=default_commission_index,
+            key="commission_type_sidebar_v1"
+        )
+        commission_rate_ui = 0.0
+        if commission_type_ui == "Fixed per Trade":
+            commission_rate_ui = st.number_input(
+                "Commission per Side ($):",  # Clarified "per Side"
+                min_value=0.0, 
+                value=settings.DEFAULT_COMMISSION_FIXED_PER_TRADE, 
+                step=0.01, format="%.2f",
+                key="commission_fixed_sidebar_v1",
+                help="Commission applied to both entry and exit of a trade."
+            )
+        elif commission_type_ui == "Percentage of Trade Value":
+            commission_rate_ui = st.number_input(
+                "Commission Rate (% of Value per Side):", # Clarified "per Side"
+                min_value=0.0, 
+                value=settings.DEFAULT_COMMISSION_PERCENTAGE_OF_VALUE * 100, # Display as percentage
+                step=0.001, format="%.3f",
+                key="commission_percentage_sidebar_v1",
+                help="Percentage of trade value applied to both entry and exit."
+            )
+        
+        slippage_points_ui = st.number_input(
+            "Slippage per Side (points):", 
+            min_value=0.0, 
+            value=settings.DEFAULT_SLIPPAGE_POINTS, 
+            step=0.01, format="%.2f",
+            key="slippage_points_sidebar_v1",
+            help="Price difference due to slippage applied to both entry and exit."
+        )
+
+
     # --- Section 3: Analysis Mode ---
     analysis_mode_ui = st.sidebar.radio(
         "🔬 Analysis Type:",
         ("Single Backtest", "Parameter Optimization", "Walk-Forward Optimization"),
-        index=0, key="analysis_mode_sidebar_v2",
-        horizontal=True # Make radio buttons horizontal if space allows and looks good
+        index=0, key="analysis_mode_sidebar_v2", # Keep key consistent if other parts depend on it
+        horizontal=True
     )
-    st.sidebar.markdown("---") # Visual separator
+    st.sidebar.markdown("---") 
 
     # --- Section 4: Manual Run Parameters (Conditional) ---
-    # This expander is more relevant for "Single Backtest" but parameters are used as defaults for opt/WFO too.
-    # We can make it expanded by default if Single Backtest is chosen.
     manual_run_expanded = True if analysis_mode_ui == "Single Backtest" else False
     with st.sidebar.expander("🎯 Manual Run & Base Parameters", expanded=manual_run_expanded):
         st.caption("Parameters for a single backtest run, or base values if not optimized.")
@@ -190,50 +239,52 @@ def render_sidebar():
 
     # --- Section 5: Optimization Settings (Conditional) ---
     opt_algo_ui = settings.DEFAULT_OPTIMIZATION_ALGORITHM
+    # Ensure .values() is called if these are dicts as in settings.py
     sl_min_opt_ui, sl_max_opt_ui, sl_steps_opt_ui = settings.DEFAULT_SL_POINTS_OPTIMIZATION_RANGE.values()
     rrr_min_opt_ui, rrr_max_opt_ui, rrr_steps_opt_ui = settings.DEFAULT_RRR_OPTIMIZATION_RANGE.values()
     esh_min_opt_ui, esh_max_opt_ui, esh_steps_opt_ui = settings.DEFAULT_ENTRY_START_HOUR_OPTIMIZATION_RANGE.values()
     esm_vals_opt_ui = list(settings.DEFAULT_ENTRY_START_MINUTE_OPTIMIZATION_VALUES)
     eeh_min_opt_ui, eeh_max_opt_ui, eeh_steps_opt_ui = settings.DEFAULT_ENTRY_END_HOUR_OPTIMIZATION_RANGE.values()
+    
     rand_iters_ui = settings.DEFAULT_RANDOM_SEARCH_ITERATIONS
     opt_metric_ui = settings.DEFAULT_OPTIMIZATION_METRIC
 
     if analysis_mode_ui in ["Parameter Optimization", "Walk-Forward Optimization"]:
-        with st.sidebar.expander("🛠️ In-Sample Optimization Settings", expanded=True):
+        with st.sidebar.expander("🛠️ In-Sample Optimization Settings", expanded=True): # Default to expanded for these modes
             opt_algo_ui = st.selectbox("Algorithm:", settings.OPTIMIZATION_ALGORITHMS, index=settings.OPTIMIZATION_ALGORITHMS.index(opt_algo_ui), key="opt_algo_sidebar_v2")
             opt_metric_ui = st.selectbox("Optimize Metric:", settings.OPTIMIZATION_METRICS, index=settings.OPTIMIZATION_METRICS.index(opt_metric_ui), key="opt_metric_sidebar_v2")
             
             st.markdown("**SL Range (points):**")
-            c1,c2,c3 = st.columns(3)
-            sl_min_opt_ui = c1.number_input("Min", value=sl_min_opt_ui, step=0.1, format="%.1f", key="slmin_o_sidebar_v2", min_value=0.1)
-            sl_max_opt_ui = c2.number_input("Max", value=sl_max_opt_ui, step=0.1, format="%.1f", key="slmax_o_sidebar_v2", min_value=sl_min_opt_ui + 0.1)
+            c1_sl,c2_sl,c3_sl = st.columns(3)
+            sl_min_opt_ui = c1_sl.number_input("Min", value=sl_min_opt_ui, step=0.1, format="%.1f", key="slmin_o_sidebar_v2", min_value=0.1)
+            sl_max_opt_ui = c2_sl.number_input("Max", value=sl_max_opt_ui, step=0.1, format="%.1f", key="slmax_o_sidebar_v2", min_value=sl_min_opt_ui + 0.1)
             if opt_algo_ui == "Grid Search":
-                sl_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(sl_steps_opt_ui), step=1, key="slsteps_o_sidebar_v2")
+                sl_steps_opt_ui = c3_sl.number_input("Steps", min_value=2, max_value=20, value=int(sl_steps_opt_ui), step=1, key="slsteps_o_sidebar_v2")
             
             st.markdown("**RRR Range:**")
-            c1,c2,c3 = st.columns(3)
-            rrr_min_opt_ui = c1.number_input("Min", value=rrr_min_opt_ui, step=0.1, format="%.1f", key="rrrmin_o_sidebar_v2", min_value=0.1)
-            rrr_max_opt_ui = c2.number_input("Max", value=rrr_max_opt_ui, step=0.1, format="%.1f", key="rrrmax_o_sidebar_v2", min_value=rrr_min_opt_ui + 0.1)
+            c1_rrr,c2_rrr,c3_rrr = st.columns(3)
+            rrr_min_opt_ui = c1_rrr.number_input("Min", value=rrr_min_opt_ui, step=0.1, format="%.1f", key="rrrmin_o_sidebar_v2", min_value=0.1)
+            rrr_max_opt_ui = c2_rrr.number_input("Max", value=rrr_max_opt_ui, step=0.1, format="%.1f", key="rrrmax_o_sidebar_v2", min_value=rrr_min_opt_ui + 0.1)
             if opt_algo_ui == "Grid Search":
-                rrr_steps_opt_ui = c3.number_input("Steps", min_value=2, max_value=20, value=int(rrr_steps_opt_ui), step=1, key="rrrsteps_o_sidebar_v2")
+                rrr_steps_opt_ui = c3_rrr.number_input("Steps", min_value=2, max_value=20, value=int(rrr_steps_opt_ui), step=1, key="rrrsteps_o_sidebar_v2")
 
             if selected_strategy_name == "Gap Guardian":
                 st.markdown("**Entry Start Hr Range (NY):**")
-                c1,c2,c3 = st.columns(3)
-                esh_min_opt_ui = c1.number_input("Min Hr", value=esh_min_opt_ui, min_value=0, max_value=23, step=1, key="eshmin_o_sidebar_v2")
-                esh_max_opt_ui = c2.number_input("Max Hr", value=esh_max_opt_ui, min_value=esh_min_opt_ui, max_value=23, step=1, key="eshmax_o_sidebar_v2")
+                c1_esh,c2_esh,c3_esh = st.columns(3)
+                esh_min_opt_ui = c1_esh.number_input("Min Hr", value=esh_min_opt_ui, min_value=0, max_value=23, step=1, key="eshmin_o_sidebar_v2")
+                esh_max_opt_ui = c2_esh.number_input("Max Hr", value=esh_max_opt_ui, min_value=esh_min_opt_ui, max_value=23, step=1, key="eshmax_o_sidebar_v2")
                 if opt_algo_ui == "Grid Search":
-                    esh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(esh_steps_opt_ui), step=1, key="eshsteps_o_sidebar_v2")
+                    esh_steps_opt_ui = c3_esh.number_input("Hr Steps", min_value=1, max_value=10, value=int(esh_steps_opt_ui), step=1, key="eshsteps_o_sidebar_v2")
                 
-                esm_vals_opt_ui = st.multiselect("Entry Start Min(s) (NY):", [0,15,30,45,50], default=esm_vals_opt_ui, key="esmvals_o_sidebar_v2")
+                esm_vals_opt_ui = st.multiselect("Entry Start Min(s) (NY):", [0,15,30,45], default=[val for val in esm_vals_opt_ui if val in [0,15,30,45]], key="esmvals_o_sidebar_v2") # Corrected default
                 if not esm_vals_opt_ui: esm_vals_opt_ui = [settings.DEFAULT_ENTRY_WINDOW_START_MINUTE]
 
                 st.markdown("**Entry End Hr Range (NY):**")
-                c1,c2,c3 = st.columns(3)
-                eeh_min_opt_ui = c1.number_input("Min Hr", value=eeh_min_opt_ui, min_value=0, max_value=23, step=1, key="eehmin_o_sidebar_v2")
-                eeh_max_opt_ui = c2.number_input("Max Hr", value=eeh_max_opt_ui, min_value=eeh_min_opt_ui, max_value=23, step=1, key="eehmax_o_sidebar_v2")
+                c1_eeh,c2_eeh,c3_eeh = st.columns(3)
+                eeh_min_opt_ui = c1_eeh.number_input("Min Hr", value=eeh_min_opt_ui, min_value=0, max_value=23, step=1, key="eehmin_o_sidebar_v2")
+                eeh_max_opt_ui = c2_eeh.number_input("Max Hr", value=eeh_max_opt_ui, min_value=eeh_min_opt_ui, max_value=23, step=1, key="eehmax_o_sidebar_v2")
                 if opt_algo_ui == "Grid Search":
-                    eeh_steps_opt_ui = c3.number_input("Hr Steps", min_value=1, max_value=10, value=int(eeh_steps_opt_ui), step=1, key="eehsteps_o_sidebar_v2")
+                    eeh_steps_opt_ui = c3_eeh.number_input("Hr Steps", min_value=1, max_value=10, value=int(eeh_steps_opt_ui), step=1, key="eehsteps_o_sidebar_v2")
             
             if opt_algo_ui == "Random Search":
                 rand_iters_ui = st.number_input("Random Iterations:", min_value=10, max_value=1000, value=rand_iters_ui, step=10, key="randiter_o_sidebar_v2")
@@ -241,7 +292,7 @@ def render_sidebar():
             if opt_algo_ui == "Grid Search":
                 grid_combs = int(sl_steps_opt_ui * rrr_steps_opt_ui)
                 if selected_strategy_name == "Gap Guardian":
-                    grid_combs *= int(esh_steps_opt_ui * len(esm_vals_opt_ui) * eeh_steps_opt_ui) # Ensure eeh_steps_opt_ui is int
+                    grid_combs *= int(esh_steps_opt_ui * len(esm_vals_opt_ui) * eeh_steps_opt_ui) 
                 st.caption(f"Estimated Grid Combinations: {grid_combs}")
             else:
                 st.caption(f"Random Iterations: {rand_iters_ui}")
@@ -249,37 +300,47 @@ def render_sidebar():
     # --- Section 6: WFO Settings (Conditional) ---
     wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui = st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val
     if analysis_mode_ui == "Walk-Forward Optimization":
-        with st.sidebar.expander("🚶 Walk-Forward Settings (Calendar Days)", expanded=True):
+        with st.sidebar.expander("🚶 Walk-Forward Settings (Calendar Days)", expanded=True): # Default to expanded
             total_available_days_for_wfo = (end_date_ui - start_date_ui).days + 1
-            MIN_WFO_IS_DAYS, MIN_WFO_OOS_DAYS, MIN_WFO_STEP_DAYS = 30, 10, 10
+            MIN_WFO_IS_DAYS, MIN_WFO_OOS_DAYS, MIN_WFO_STEP_DAYS = 30, 10, 10 # Consider making these configurable in settings.py
 
-            calculated_isd, calculated_oosd, calculated_stepd = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
-            if total_available_days_for_wfo >= MIN_WFO_IS_DAYS + MIN_WFO_OOS_DAYS:
-                tentative_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo // 5)
-                tentative_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - (tentative_oosd * 2))
-                if tentative_isd + tentative_oosd > total_available_days_for_wfo:
-                    calculated_isd = max(MIN_WFO_IS_DAYS, int(total_available_days_for_wfo * 0.7))
-                    calculated_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo - calculated_isd)
+            # Suggest sensible defaults based on total period, if not already set or if they seem off
+            # This logic can be refined
+            if st.session_state.get('recalculate_wfo_defaults', True) or not (MIN_WFO_IS_DAYS <= wfo_isd_ui <= total_available_days_for_wfo):
+                if total_available_days_for_wfo >= MIN_WFO_IS_DAYS + MIN_WFO_OOS_DAYS:
+                    tentative_oosd = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo // 5) # e.g., 20% for OOS
+                    tentative_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - (tentative_oosd * 2)) # Heuristic
+                    
+                    if tentative_isd + tentative_oosd > total_available_days_for_wfo : # Adjust if sum exceeds total
+                        wfo_isd_ui = max(MIN_WFO_IS_DAYS, int(total_available_days_for_wfo * 0.7))
+                        wfo_oosd_ui = max(MIN_WFO_OOS_DAYS, total_available_days_for_wfo - wfo_isd_ui)
+                    else:
+                        wfo_isd_ui, wfo_oosd_ui = tentative_isd, tentative_oosd
+                    
+                    wfo_sd_ui = max(MIN_WFO_STEP_DAYS, wfo_oosd_ui) # Step usually related to OOS period
+                    
+                    # Final sanity checks
+                    wfo_isd_ui = max(MIN_WFO_IS_DAYS, wfo_isd_ui)
+                    wfo_oosd_ui = max(MIN_WFO_OOS_DAYS, wfo_oosd_ui)
+                    if wfo_isd_ui + wfo_oosd_ui > total_available_days_for_wfo: # If still problematic, prioritize OOS and adjust IS
+                        wfo_oosd_ui = max(MIN_WFO_OOS_DAYS, int(total_available_days_for_wfo * 0.25))
+                        wfo_isd_ui = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - wfo_oosd_ui)
+                        wfo_sd_ui = max(MIN_WFO_STEP_DAYS, wfo_oosd_ui)
+
+                    st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
+                    st.session_state.recalculate_wfo_defaults = False # Avoid recalculating on every interaction unless dates change
+                    st.caption(f"Suggested WFO: IS={wfo_isd_ui}d, OOS={wfo_oosd_ui}d, Step={wfo_sd_ui}d for {total_available_days_for_wfo}d total.")
                 else:
-                    calculated_isd, calculated_oosd = tentative_isd, tentative_oosd
-                calculated_stepd = max(MIN_WFO_STEP_DAYS, calculated_oosd)
-                calculated_isd = max(MIN_WFO_IS_DAYS, calculated_isd)
-                calculated_oosd = max(MIN_WFO_OOS_DAYS, calculated_oosd)
-                if calculated_isd + calculated_oosd > total_available_days_for_wfo:
-                    calculated_oosd = max(MIN_WFO_OOS_DAYS, int(total_available_days_for_wfo * 0.25))
-                    calculated_isd = max(MIN_WFO_IS_DAYS, total_available_days_for_wfo - calculated_oosd)
-                    calculated_stepd = max(MIN_WFO_STEP_DAYS, calculated_oosd)
-                st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = calculated_isd, calculated_oosd, calculated_stepd
-                st.caption(f"Suggested WFO: IS={calculated_isd}d, OOS={calculated_oosd}d, Step={calculated_stepd}d for {total_available_days_for_wfo}d total.")
-            else:
-                st.caption(f"Total period ({total_available_days_for_wfo}d) is short. Min {MIN_WFO_IS_DAYS+MIN_WFO_OOS_DAYS}d recommended.")
-
-            wfo_isd_ui = st.number_input("In-Sample (Days):", min_value=MIN_WFO_IS_DAYS, value=st.session_state.wfo_isd_ui_val, step=10, key="wfoisd_sidebar_v2")
-            wfo_oosd_ui = st.number_input("Out-of-Sample (Days):", min_value=MIN_WFO_OOS_DAYS, value=st.session_state.wfo_oosd_ui_val, step=5, key="wfoosd_sidebar_v2")
-            wfo_sd_ui = st.number_input("Step (Days):", min_value=max(MIN_WFO_STEP_DAYS, wfo_oosd_ui), value=max(st.session_state.wfo_sd_ui_val, wfo_oosd_ui), step=5, key="wfosd_sidebar_v2", help="Step must be >= Out-of-Sample days.")
-            st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = wfo_isd_ui, wfo_oosd_ui, wfo_sd_ui
+                    st.caption(f"Total period ({total_available_days_for_wfo}d) is short. Min {MIN_WFO_IS_DAYS+MIN_WFO_OOS_DAYS}d recommended.")
+            
+            wfo_isd_ui_val_input = st.number_input("In-Sample (Days):", min_value=MIN_WFO_IS_DAYS, value=st.session_state.wfo_isd_ui_val, step=10, key="wfoisd_sidebar_v2")
+            wfo_oosd_ui_val_input = st.number_input("Out-of-Sample (Days):", min_value=MIN_WFO_OOS_DAYS, value=st.session_state.wfo_oosd_ui_val, step=5, key="wfoosd_sidebar_v2")
+            wfo_sd_ui_val_input = st.number_input("Step (Days):", min_value=max(MIN_WFO_STEP_DAYS, wfo_oosd_ui_val_input), value=max(st.session_state.wfo_sd_ui_val, wfo_oosd_ui_val_input), step=5, key="wfosd_sidebar_v2", help="Step must be >= Out-of-Sample days.")
+            
+            # Update session state if user changes them
+            st.session_state.wfo_isd_ui_val, st.session_state.wfo_oosd_ui_val, st.session_state.wfo_sd_ui_val = wfo_isd_ui_val_input, wfo_oosd_ui_val_input, wfo_sd_ui_val_input
     
-    st.sidebar.markdown("---") # Visual separator before the run button
+    st.sidebar.markdown("---") 
     run_button_clicked = st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True, key="run_main_sidebar_v2")
 
     sidebar_inputs = {
@@ -291,22 +352,33 @@ def render_sidebar():
         "end_date_ui": end_date_ui,
         "initial_capital_ui": initial_capital_ui,
         "risk_per_trade_percent_ui": risk_per_trade_percent_ui,
+        
+        # Transaction cost inputs
+        "commission_type_ui": commission_type_ui,
+        "commission_rate_ui": commission_rate_ui / 100.0 if commission_type_ui == "Percentage of Trade Value" else commission_rate_ui, # Convert percentage back to decimal for backend
+        "slippage_points_ui": slippage_points_ui,
+
         "sl_points_single_ui": sl_points_single_ui,
         "rrr_single_ui": rrr_single_ui,
         "entry_start_hour_single_ui": entry_start_hour_single_ui,
         "entry_start_minute_single_ui": entry_start_minute_single_ui,
         "entry_end_hour_single_ui": entry_end_hour_single_ui,
         "entry_end_minute_single_ui": entry_end_minute_single_ui,
+        
         "analysis_mode_ui": analysis_mode_ui,
         "opt_algo_ui": opt_algo_ui,
-        "sl_min_opt_ui": sl_min_opt_ui, "sl_max_opt_ui": sl_max_opt_ui, "sl_steps_opt_ui": int(sl_steps_opt_ui), # Ensure steps are int
-        "rrr_min_opt_ui": rrr_min_opt_ui, "rrr_max_opt_ui": rrr_max_opt_ui, "rrr_steps_opt_ui": int(rrr_steps_opt_ui), # Ensure steps are int
-        "esh_min_opt_ui": esh_min_opt_ui, "esh_max_opt_ui": esh_max_opt_ui, "esh_steps_opt_ui": int(esh_steps_opt_ui), # Ensure steps are int
+        "sl_min_opt_ui": sl_min_opt_ui, "sl_max_opt_ui": sl_max_opt_ui, "sl_steps_opt_ui": int(sl_steps_opt_ui),
+        "rrr_min_opt_ui": rrr_min_opt_ui, "rrr_max_opt_ui": rrr_max_opt_ui, "rrr_steps_opt_ui": int(rrr_steps_opt_ui),
+        "esh_min_opt_ui": esh_min_opt_ui, "esh_max_opt_ui": esh_max_opt_ui, "esh_steps_opt_ui": int(esh_steps_opt_ui),
         "esm_vals_opt_ui": esm_vals_opt_ui,
-        "eeh_min_opt_ui": eeh_min_opt_ui, "eeh_max_opt_ui": eeh_max_opt_ui, "eeh_steps_opt_ui": int(eeh_steps_opt_ui), # Ensure steps are int
+        "eeh_min_opt_ui": eeh_min_opt_ui, "eeh_max_opt_ui": eeh_max_opt_ui, "eeh_steps_opt_ui": int(eeh_steps_opt_ui),
         "rand_iters_ui": rand_iters_ui,
         "opt_metric_ui": opt_metric_ui,
-        "wfo_isd_ui": wfo_isd_ui, "wfo_oosd_ui": wfo_oosd_ui, "wfo_sd_ui": wfo_sd_ui,
+        
+        "wfo_isd_ui": st.session_state.wfo_isd_ui_val, 
+        "wfo_oosd_ui": st.session_state.wfo_oosd_ui_val, 
+        "wfo_sd_ui": st.session_state.wfo_sd_ui_val,
+        
         "run_button_clicked": run_button_clicked
     }
     
@@ -320,22 +392,27 @@ def display_main_content_header(sidebar_inputs):
     """Displays the main content header based on sidebar inputs."""
     selected_strategy_name = sidebar_inputs["selected_strategy_name"]
     selected_ticker_name = sidebar_inputs["selected_ticker_name"]
-    selected_timeframe_display = [k for k, v in settings.AVAILABLE_TIMEFRAMES.items() if v == sidebar_inputs["ui_current_interval"]][0]
+    # Find the display name for the timeframe
+    selected_timeframe_display = "N/A"
+    for k, v in settings.AVAILABLE_TIMEFRAMES.items():
+        if v == sidebar_inputs["ui_current_interval"]:
+            selected_timeframe_display = k
+            break
 
     st.title(f"🛡️📈 {settings.APP_TITLE}")
     
-    # Using columns for a more structured header display
-    col1, col2 = st.columns([3,2]) # Adjust ratio as needed
+    col1, col2 = st.columns([3,1]) 
     with col1:
-        st.markdown(f"##### Strategy: **{selected_strategy_name}** on **{selected_ticker_name}** ({sidebar_inputs['ui_current_interval']})")
+        st.markdown(f"##### Strategy: **{selected_strategy_name}** on **{selected_ticker_name}** ({selected_timeframe_display})")
     with col2:
         if selected_strategy_name == "Gap Guardian":
-            st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Manual Entry: {settings.DEFAULT_ENTRY_WINDOW_START_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_START_MINUTE:02d}-{settings.DEFAULT_ENTRY_WINDOW_END_HOUR:02d}:{settings.DEFAULT_ENTRY_WINDOW_END_MINUTE:02d} NYT</p>", unsafe_allow_html=True)
+            entry_start_t = dt_time(sidebar_inputs["entry_start_hour_single_ui"], sidebar_inputs["entry_start_minute_single_ui"])
+            entry_end_t = dt_time(sidebar_inputs["entry_end_hour_single_ui"], sidebar_inputs["entry_end_minute_single_ui"])
+            st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Entry: {entry_start_t:%H:%M}-{entry_end_t:%H:%M} NYT</p>", unsafe_allow_html=True)
         elif selected_strategy_name == "Silver Bullet":
-             st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Fixed NYT Windows: {', '.join([f'{s.strftime('%H:%M')}-{e.strftime('%H:%M')}' for s, e in settings.SILVER_BULLET_WINDOWS_NY])}</p>", unsafe_allow_html=True)
+             st.markdown(f"<p style='font-size:0.9em; text-align:right;'>Fixed NYT Windows</p>", unsafe_allow_html=True)
     
-    st.markdown("---") # Visual separator after main title and info
+    st.markdown("---")
 
     with st.expander(f"Understanding the '{selected_strategy_name}' Strategy", expanded=False):
         st.markdown(STRATEGY_EXPLANATIONS.get(selected_strategy_name, "Explanation not available for this strategy."))
-
