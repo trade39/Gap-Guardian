@@ -8,7 +8,7 @@ from datetime import datetime
 import os # Added for os.cpu_count()
 
 # --- Application Information ---
-APP_VERSION = "0.7.1" # Incremented version
+APP_VERSION = "0.7.2" # Incremented version
 APP_LAST_UPDATED = datetime.now().strftime('%Y-%m-%d %H:%M') # Auto-updates on run
 APP_DISCLAIMER = "Disclaimer: This is a financial modeling tool for educational and research purposes. Past performance and optimization results are not indicative of future results and can be subject to overfitting. Always practice responsible risk management."
 
@@ -40,6 +40,13 @@ DEFAULT_INITIAL_CAPITAL = 100000.0
 DEFAULT_RISK_PER_TRADE_PERCENT = 0.5
 DEFAULT_STOP_LOSS_POINTS = 15.0 # General SL, can be adapted by strategy
 DEFAULT_RRR = 3.0 # General RRR
+
+# --- Transaction Cost Settings ---
+DEFAULT_COMMISSION_TYPE = "None"  # Options: "None", "Fixed per Trade", "Percentage of Trade Value"
+DEFAULT_COMMISSION_FIXED_PER_TRADE = 1.0  # e.g., $1 per trade (applied per side, so $2 for a round trip if logic is per side)
+DEFAULT_COMMISSION_PERCENTAGE_OF_VALUE = 0.001   # e.g., 0.1% of trade value (applied per side)
+DEFAULT_SLIPPAGE_POINTS = 0.0           # e.g., 0.0 price points per side of the trade (can be set by user)
+
 
 # --- Timeframe Settings ---
 AVAILABLE_TIMEFRAMES = {
